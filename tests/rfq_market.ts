@@ -39,7 +39,7 @@ describe("rfq_market", () => {
     const rfq = P.rfq(buyer.publicKey, nonce);
     await program.methods
       .postRfq(new BN(nonce.toString()), [...sha256(spec)], "http://indexer/specs/x", new BN(maxPrice), new BN(now() + deadlineIn))
-      .accounts({ buyer: buyer.publicKey })
+      .accountsPartial({ buyer: buyer.publicKey })
       .signers([buyer])
       .rpc();
     return rfq;
@@ -49,7 +49,7 @@ describe("rfq_market", () => {
     const uri = `http://seller/${seller.publicKey.toBase58().slice(0, 6)}/q/${rfq.toBase58()}`;
     await program.methods
       .submitQuote(new BN(price), [...sha256(uri)], uri, new BN(now() + 3600))
-      .accounts({ seller: seller.publicKey, rfq })
+      .accountsPartial({ seller: seller.publicKey, rfq })
       .signers([seller])
       .rpc();
     return P.quote(rfq, seller.publicKey);
@@ -77,7 +77,7 @@ describe("rfq_market", () => {
 
     await program.methods
       .initialize(100, mint, treasury)
-      .accounts({ authority: authority.publicKey, usdcMint: mint, treasury })
+      .accountsPartial({ authority: authority.publicKey, usdcMint: mint, treasury })
       .rpc();
     const cfg = await program.account.config.fetch(P.config());
     expect(cfg.feeBps).to.eq(100);
@@ -98,7 +98,7 @@ describe("rfq_market", () => {
     const buyerBefore = (await getAccount(conn, buyerUsdc)).amount;
     await program.methods
       .award()
-      .accounts({ buyer: buyer.publicKey, rfq, quote: qB, buyerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: qB, buyerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
       .signers([buyer])
       .rpc();
     const after = (await getAccount(conn, treasury)).amount;
@@ -114,7 +114,7 @@ describe("rfq_market", () => {
     await expectErr(
       program.methods
         .recordFulfillment([...Buffer.alloc(64, 7)], [...sha256("x")])
-        .accounts({ buyer: buyer.publicKey, rfq, quote: qA })
+        .accountsPartial({ buyer: buyer.publicKey, rfq, quote: qA })
         .signers([buyer])
         .rpc(),
       "QuoteMismatch",
@@ -124,7 +124,7 @@ describe("rfq_market", () => {
     const respHash = sha256('{"endpoint_count":1}');
     await program.methods
       .recordFulfillment([...paymentSig], [...respHash])
-      .accounts({ buyer: buyer.publicKey, rfq, quote: qB })
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: qB })
       .signers([buyer])
       .rpc();
     r = await program.account.rfq.fetch(rfq);
@@ -151,7 +151,7 @@ describe("rfq_market", () => {
     const qA = await quote(rfq, sellerA, 70_000);
     await program.methods
       .award()
-      .accounts({ buyer: buyer.publicKey, rfq, quote: qA, buyerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: qA, buyerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
       .signers([buyer])
       .rpc();
     await expectErr(quote(rfq, sellerB, 60_000), "RfqNotOpen");
@@ -163,7 +163,7 @@ describe("rfq_market", () => {
     await expectErr(
       program.methods
         .award()
-        .accounts({ buyer: stranger.publicKey, rfq, quote: qA, buyerUsdc: strangerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
+        .accountsPartial({ buyer: stranger.publicKey, rfq, quote: qA, buyerUsdc: strangerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
         .signers([stranger])
         .rpc(),
       "NotBuyer",
@@ -176,7 +176,7 @@ describe("rfq_market", () => {
     await expectErr(
       program.methods
         .award()
-        .accounts({ buyer: buyer.publicKey, rfq, quote: qA, buyerUsdc, treasury: strangerUsdc, tokenProgram: TOKEN_PROGRAM_ID })
+        .accountsPartial({ buyer: buyer.publicKey, rfq, quote: qA, buyerUsdc, treasury: strangerUsdc, tokenProgram: TOKEN_PROGRAM_ID })
         .signers([buyer])
         .rpc(),
       "TreasuryMismatch",
@@ -186,14 +186,14 @@ describe("rfq_market", () => {
   it("cancel_rfq only while open, and only by the buyer", async () => {
     const rfq = await postRfq(100_000, 60);
     await expectErr(
-      program.methods.cancelRfq().accounts({ buyer: stranger.publicKey, rfq }).signers([stranger]).rpc(),
+      program.methods.cancelRfq().accountsPartial({ buyer: stranger.publicKey, rfq }).signers([stranger]).rpc(),
       "NotBuyer",
     );
-    await program.methods.cancelRfq().accounts({ buyer: buyer.publicKey, rfq }).signers([buyer]).rpc();
+    await program.methods.cancelRfq().accountsPartial({ buyer: buyer.publicKey, rfq }).signers([buyer]).rpc();
     expect((await program.account.rfq.fetch(rfq)).status).to.eq(3);
     await expectErr(quote(rfq, sellerA, 10_000), "RfqNotOpen");
     await expectErr(
-      program.methods.cancelRfq().accounts({ buyer: buyer.publicKey, rfq }).signers([buyer]).rpc(),
+      program.methods.cancelRfq().accountsPartial({ buyer: buyer.publicKey, rfq }).signers([buyer]).rpc(),
       "RfqNotOpen",
     );
   });

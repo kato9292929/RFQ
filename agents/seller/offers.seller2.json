@@ -1,0 +1,19 @@
+{
+  "name": "seller2",
+  "offers": [
+    {
+      "id": "catalog-counts",
+      "category": "market-data",
+      "fields": ["endpoint_count", "host_count", "by_category", "by_chain"],
+      "list_price": 35000,
+      "description": "x402 ecosystem endpoint/host counts from the public endpoint catalog snapshot"
+    },
+    {
+      "id": "first-party",
+      "category": "providers",
+      "fields": ["first_party_providers"],
+      "list_price": 20000,
+      "description": "First-party x402 providers seen in the catalog"
+    }
+  ]
+}
