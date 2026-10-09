@@ -95,3 +95,19 @@ export function fmtUsdc(n: bigint | number | string): string {
   const v = BigInt(n);
   return `${v / 1_000_000n}.${(v % 1_000_000n).toString().padStart(6, "0")}`;
 }
+
+/** Retry transient RPC/network failures with exponential backoff. */
+export async function retry<T>(fn: () => Promise<T>, label = "rpc", attempts = 5): Promise<T> {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      last = e;
+      const cause = e?.cause?.code ?? e?.cause?.message ?? "";
+      console.warn(`[retry] ${label} attempt ${i + 1}/${attempts} failed: ${e?.message ?? e} ${cause}`);
+      await sleep(500 * 2 ** i);
+    }
+  }
+  throw last;
+}

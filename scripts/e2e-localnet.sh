@@ -25,7 +25,7 @@ for _ in $(seq 1 60); do solana -u localhost cluster-version >/dev/null 2>&1 && 
 export USDC_MINT=$(npx tsx scripts/localnet-setup.ts)
 echo "local test USDC mint: $USDC_MINT"
 npx tsx scripts/init-config.ts
-npx tsx facilitator/src/server.ts > "$RUN_DIR/facilitator.log" 2>&1 & PIDS+=($!)
+node --import tsx facilitator/src/server.ts > "$RUN_DIR/facilitator.log" 2>&1 & PIDS+=($!)
 for _ in $(seq 1 30); do curl -sf $FACILITATOR_URL/supported >/dev/null && break; sleep 1; done
 
 bash scripts/e2e-run.sh

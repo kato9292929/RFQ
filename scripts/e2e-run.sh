@@ -14,15 +14,17 @@ PIDS=()
 cleanup() { for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
 
+port_free() { ! (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null || { echo "port $1 is already in use (stale process?)"; exit 1; }; }
 wait_http() { for _ in $(seq 1 60); do curl -sf "$1" >/dev/null && return 0; sleep 1; done; echo "timeout waiting for $1"; return 1; }
 
-npx tsx indexer/src/server.ts > "$RUN_DIR/indexer.log" 2>&1 & PIDS+=($!)
+port_free $INDEXER_PORT; port_free 8801; port_free 8802
+node --import tsx indexer/src/server.ts > "$RUN_DIR/indexer.log" 2>&1 & PIDS+=($!)
 wait_http "$INDEXER_URL/health"
 
 for i in 1 2; do
   port=$((8800 + i))
   SELLER_KEYPAIR=.keys/seller$i.json SELLER_OFFERS=agents/seller/offers.seller$i.json SELLER_PORT=$port \
-    npx tsx agents/seller/src/index.ts > "$RUN_DIR/seller$i.log" 2>&1 & PIDS+=($!)
+    node --import tsx agents/seller/src/index.ts > "$RUN_DIR/seller$i.log" 2>&1 & PIDS+=($!)
 done
 wait_http http://127.0.0.1:8801/health
 wait_http http://127.0.0.1:8802/health
@@ -35,8 +37,8 @@ rc=${PIPESTATUS[0]}
 set -e
 
 echo "---- GET /fulfillments ----"
-curl -s "$INDEXER_URL/fulfillments" | node -e '
+curl -s --retry 3 -m 60 "$INDEXER_URL/fulfillments" | node -e '
 let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const f of JSON.parse(s)){console.log(`${f.rfq}  price=${f.price_usdc} USDC  payment_tx=${f.payment_sig}  verified: ${f.verified}`)}})'
 echo "---- GET /stats ----"
-curl -s "$INDEXER_URL/stats"; echo
+curl -s --retry 3 -m 60 "$INDEXER_URL/stats"; echo
 exit $rc

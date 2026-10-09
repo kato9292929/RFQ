@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
-import { ROOT, STATUS, connection, env, fmtUsdc, program, sha256 } from "../../lib/common.js";
+import { ROOT, STATUS, connection, env, fmtUsdc, program, retry, sha256 } from "../../lib/common.js";
 
 const PORT = Number(env("INDEXER_PORT", "8787"));
 const PUBLIC_URL = env("INDEXER_PUBLIC_URL", `http://127.0.0.1:${PORT}`);
@@ -81,7 +81,7 @@ async function verifyPayment(sigB58: string, rfq: RfqAcc, quote: QuoteAcc, usdcM
     verifyCache.set(sigB58, v);
     return v;
   };
-  const tx = await conn.getParsedTransaction(sigB58, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+  const tx = await retry(() => conn.getParsedTransaction(sigB58, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }), "getParsedTransaction");
   if (!tx) return done(false, "transaction not found");
   if (tx.meta?.err) return done(false, `transaction failed: ${JSON.stringify(tx.meta.err)}`);
   const pre = tx.meta?.preTokenBalances ?? [];
@@ -132,7 +132,7 @@ app.get(
   "/config",
   wrap(async (_req, res) => {
     const [pda] = PublicKey.findProgramAddressSync([Buffer.from("config")], prog.programId);
-    const c = await prog.account.config.fetch(pda);
+    const c = await retry(() => prog.account.config.fetch(pda), "config.fetch");
     res.json({
       pubkey: pda.toBase58(),
       authority: c.authority.toBase58(),
@@ -147,7 +147,8 @@ app.get(
   "/rfqs",
   wrap(async (req, res) => {
     const want = req.query.status as string | undefined;
-    const [rfqs, quotes] = await Promise.all([prog.account.rfq.all(), prog.account.quote.all()]);
+    const rfqs = await retry(() => prog.account.rfq.all(), "rfq.all");
+    const quotes = await retry(() => prog.account.quote.all(), "quote.all");
     const byRfq = new Map<string, typeof quotes>();
     for (const q of quotes) {
       const k = q.account.rfq.toBase58();
@@ -169,11 +170,11 @@ app.get(
   "/rfqs/:pubkey",
   wrap(async (req, res) => {
     const pk = new PublicKey(req.params.pubkey);
-    const r = await prog.account.rfq.fetchNullable(pk);
+    const r = await retry(() => prog.account.rfq.fetchNullable(pk), "rfq.fetchNullable");
     if (!r) return res.status(404).json({ error: "rfq not found" });
-    const quotes = await prog.account.quote.all(rfqFilter(pk));
+    const quotes = await retry(() => prog.account.quote.all(rfqFilter(pk)), "quote.all");
     const [fpk] = PublicKey.findProgramAddressSync([Buffer.from("fulfillment"), pk.toBuffer()], prog.programId);
-    const f = await prog.account.fulfillment.fetchNullable(fpk);
+    const f = await retry(() => prog.account.fulfillment.fetchNullable(fpk), "fulfillment.fetchNullable");
     res.json({
       ...rfqJson(pk, r, quotes),
       quotes: quotes.map((q) => quoteJson(q.publicKey, q.account)).sort((a, b) => Number(BigInt(a.price) - BigInt(b.price))),
@@ -187,14 +188,14 @@ app.get(
   wrap(async (req, res) => {
     const seller = req.query.seller as string | undefined;
     const filters = seller ? [{ memcmp: { offset: 8 + 32, bytes: new PublicKey(seller).toBase58() } }] : [];
-    const quotes = await prog.account.quote.all(filters);
+    const quotes = await retry(() => prog.account.quote.all(filters), "quote.all");
     res.json(quotes.map((q) => quoteJson(q.publicKey, q.account)).sort((a, b) => b.created_at - a.created_at));
   }),
 );
 
 async function fulfillmentJson(pk: PublicKey, f: FulfillmentAcc, usdcMint: string) {
   const sig = bs58.encode(Buffer.from(f.paymentSig));
-  const [rfq, quote] = await Promise.all([prog.account.rfq.fetch(f.rfq), prog.account.quote.fetch(f.quote)]);
+  const [rfq, quote] = await Promise.all([retry(() => prog.account.rfq.fetch(f.rfq), "rfq.fetch"), retry(() => prog.account.quote.fetch(f.quote), "quote.fetch")]);
   let v: Verification;
   try {
     v = await verifyPayment(sig, rfq, quote, usdcMint);
@@ -220,14 +221,14 @@ async function fulfillmentJson(pk: PublicKey, f: FulfillmentAcc, usdcMint: strin
 
 async function usdcMint(): Promise<string> {
   const [pda] = PublicKey.findProgramAddressSync([Buffer.from("config")], prog.programId);
-  return (await prog.account.config.fetch(pda)).usdcMint.toBase58();
+  return (await retry(() => prog.account.config.fetch(pda), "config.fetch")).usdcMint.toBase58();
 }
 
 app.get(
   "/fulfillments",
   wrap(async (_req, res) => {
     const mint = await usdcMint();
-    const all = await prog.account.fulfillment.all();
+    const all = await retry(() => prog.account.fulfillment.all(), "fulfillment.all");
     const out = await Promise.all(all.map((f) => fulfillmentJson(f.publicKey, f.account, mint)));
     res.json(out.sort((a, b) => b.fulfilled_at - a.fulfilled_at));
   }),
@@ -237,12 +238,12 @@ app.get(
   "/stats",
   wrap(async (_req, res) => {
     const [rfqs, quotes, fulfillments] = await Promise.all([
-      prog.account.rfq.all(),
-      prog.account.quote.all(),
-      prog.account.fulfillment.all(),
+      retry(() => prog.account.rfq.all(), "rfq.all"),
+      retry(() => prog.account.quote.all(), "quote.all"),
+      retry(() => prog.account.fulfillment.all(), "fulfillment.all"),
     ]);
     const [pda] = PublicKey.findProgramAddressSync([Buffer.from("config")], prog.programId);
-    const cfg = await prog.account.config.fetchNullable(pda);
+    const cfg = await retry(() => prog.account.config.fetchNullable(pda), "config.fetchNullable");
     const qByPk = new Map(quotes.map((q) => [q.publicKey.toBase58(), q.account]));
     const awarded = rfqs.filter((r) => r.account.awardedQuote);
     const awardedPrices = awarded.map((r) => BigInt(qByPk.get(r.account.awardedQuote!.toBase58())?.price.toString() ?? "0"));

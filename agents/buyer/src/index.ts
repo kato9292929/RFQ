@@ -12,7 +12,7 @@ import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { ExactSvmScheme } from "@x402/svm/exact/client";
 import {
   INDEXER_URL, ROOT, RPC_URL, X402_NETWORK,
-  appendLog, connection, env, explorerTx, fmtUsdc, loadKeypair, pdas, program, sha256, sleep,
+  appendLog, connection, env, explorerTx, fmtUsdc, loadKeypair, pdas, program, retry, sha256, sleep,
 } from "../../../lib/common.js";
 
 const { BN } = anchor;
@@ -71,7 +71,7 @@ while (Math.floor(Date.now() / 1000) < deadline) {
   }
   await sleep(3000);
 }
-const detail = await json<any>(`${INDEXER_URL()}/rfqs/${rfq.toBase58()}`);
+const detail = await retry(() => json<any>(`${INDEXER_URL()}/rfqs/${rfq.toBase58()}`), "indexer rfq detail");
 const nowS = Math.floor(Date.now() / 1000);
 const candidates = (detail.quotes as any[])
   .filter((q) => q.expires_at > nowS + 30 && q.endpoint_hash_ok && BigInt(q.price) <= MAX_PRICE)
@@ -167,7 +167,7 @@ record("record_fulfillment", {
 // 7. ask the indexer to verify the payment against the chain
 let mine: any;
 for (let i = 0; i < 10; i++) {
-  const all = await json<any[]>(`${INDEXER_URL()}/fulfillments`);
+  const all = await json<any[]>(`${INDEXER_URL()}/fulfillments`).catch(() => [] as any[]);
   mine = all.find((f) => f.rfq === rfq.toBase58());
   if (mine?.verified) break;
   await sleep(3000);
