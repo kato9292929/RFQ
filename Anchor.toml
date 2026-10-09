@@ -1,0 +1,19 @@
+[toolchain]
+anchor_version = "0.32.1"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+rfq_market = "7XpxowqbuaEbQ3VkuQemFi7B3aMuat7eKtp5kydGvsVp"
+
+[programs.devnet]
+rfq_market = "7XpxowqbuaEbQ3VkuQemFi7B3aMuat7eKtp5kydGvsVp"
+
+[provider]
+cluster = "localnet"
+wallet = ".keys/deployer.json"
+
+[scripts]
+test = "npx tsx node_modules/mocha/bin/mocha.js --timeout 120000 tests/**/*.ts"

@@ -1,0 +1,38 @@
+{
+  "name": "rfq-market",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "anchor test",
+    "indexer": "tsx indexer/src/server.ts",
+    "seller": "tsx agents/seller/src/index.ts",
+    "buyer": "tsx agents/buyer/src/index.ts",
+    "init-config": "tsx scripts/init-config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/kit": "^5.5.1",
+    "@solana/spl-token": "^0.4.15",
+    "@solana/web3.js": "^1.99.0",
+    "@x402/core": "^2.28.0",
+    "@x402/express": "^2.28.0",
+    "@x402/fetch": "^2.28.0",
+    "@x402/svm": "^2.28.0",
+    "bs58": "^6.0.0",
+    "dotenv": "^18.0.7",
+    "express": "^5.3.0"
+  },
+  "devDependencies": {
+    "@types/chai": "^5.2.3",
+    "@types/express": "^5.0.6",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^26.6.4",
+    "chai": "^6.3.0",
+    "mocha": "^12.0.3",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}
