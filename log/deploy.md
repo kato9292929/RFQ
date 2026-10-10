@@ -57,3 +57,15 @@ Same mechanism, varied specs (`scenarios/`). 4 fulfilled with `verified: true`, 
 
 Indexer `/stats` after these runs (all devnet RFQs, incl. the 2 aborted on 10-09): `{"rfq_count":9,"quote_count":7,"by_status":{"cancelled":4,"fulfilled":5},"award_rate":0.556,"avg_awarded_price":"0.033000","fees_total_usdc":"0.001650"}`.
 tie-at-cap: both sellers quoted the 0.03 cap in the same second; the buyer tie-break (earliest created_at, then pubkey) picked seller2.
+
+## Upgrade 2026-10-10T05:36:35Z (devnet)
+
+Same program id `7XpxowqbuaEbQ3VkuQemFi7B3aMuat7eKtp5kydGvsVp`; existing Config/Rfq/Quote/Fulfillment layouts unchanged.
+Adds `record_rejection` (Rejection PDA ["rejection", rfq], rfq status 5 = Rejected), `declare_sla` / `record_latency` (Sla PDA ["sla", quote]).
+
+| item | value |
+|---|---|
+| programdata before / binary after | 281568 / 333680 bytes |
+| extend tx | `Extended Program Id 7XpxowqbuaEbQ3VkuQemFi7B3aMuat7eKtp5kydGvsVp by 53136 bytes` |
+| upgrade tx | `4VMmTLd4j7GRc3NKMQeqXKzqEmCTufnn9b5KP2ArymGgYSpSCACndeg3d6JDmMdhtQHZxW5LzNmeHAHmuKHrqWbj` |
+| git commit | `c4c4f2e` |
