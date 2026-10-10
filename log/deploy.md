@@ -69,3 +69,45 @@ Adds `record_rejection` (Rejection PDA ["rejection", rfq], rfq status 5 = Reject
 | extend tx | `Extended Program Id 7XpxowqbuaEbQ3VkuQemFi7B3aMuat7eKtp5kydGvsVp by 53136 bytes` |
 | upgrade tx | `4VMmTLd4j7GRc3NKMQeqXKzqEmCTufnn9b5KP2ArymGgYSpSCACndeg3d6JDmMdhtQHZxW5LzNmeHAHmuKHrqWbj` |
 | git commit | `c4c4f2e` |
+
+## Upgrade 2026-10-10T07:20:09Z (devnet)
+
+Same program id `7XpxowqbuaEbQ3VkuQemFi7B3aMuat7eKtp5kydGvsVp`; existing Config/Rfq/Quote/Fulfillment layouts unchanged.
+Adds `record_rejection` (Rejection PDA ["rejection", rfq], rfq status 5 = Rejected), `declare_sla` / `record_latency` (Sla PDA ["sla", quote]).
+
+| item | value |
+|---|---|
+| programdata before / binary after | 334704 / 333680 bytes |
+| extend tx | `not needed` |
+| upgrade tx | `4cqCvamrqDd3VXpuP8K5oy7Vu2LrDSFnW7coweDdhw48zbz5XGXrj3EXWmjPdETpZYnB6Wg1wocgyqiYinfu5MuC` |
+| git commit | `af5d8cd` |
+
+## Phase B/C runs 2026-10-10 (devnet) — own buyer + own 2 sellers
+
+After the first upgrade (`4VMmTLd4…`, rejection + SLA). Mechanism behaving correctly as the spec changes; not external demand.
+
+| scenario | rfq | outcome | payment tx | record tx | SLA declared / measured |
+|---|---|---|---|---|---|
+| schema-reject | `CupWhK79fzeBq31gEH3MZZiKez9Au9sFRQjf6upPUQS9` | seller1 @ 0.03 → paid → **rejected `schema_mismatch`** (25 rows < minItems 50) | `56SsNK2ZTkNEs4pAk1SxvwKjFjXcdffstwPPEu2D9vwcbuH1ztdiSSAGo6KqPbeiQGEhLqCUwCkZr17HkgLPaURX` | `nrxtnKV6GNxPEJYvov2gcaz3cp2FBACcBewjBAcM9Gy5VufByrqHDMBuT9R1SqM8rD2PNR8kRy2X2rCW3mHzdjL` | 8000 / 1547 ms |
+| schema-accept | `Ci88LibMuScYkLL3rR17pJbfGag7qsDqhT2GFooVefjC` | seller2 @ 0.035 → fulfilled | `5nr5gP75nbRcDrBodJqAGdVbUmAHUB751n1rWhWUZaPtuotqjQjS1XkhXa9tys5ad8GCJkAWnwAP35kx2rdQ3Xu9` | `537KP9xyX9EG2cC57sQmHDdCr8G4eommbhN7gxxuDoAZFm81n6HQEnQAdn19QXeJFsSjMtDnawbwFf2Ls2dW5zHy` | 30000 / 1801 ms |
+| sla-tight | `FrCbj1exL7FEr2kZGXjMHZmAsYewY3stJWhZEKoYaB9H` | seller2 excluded (SLA 30000 > 10000) → seller1 @ 0.05 → fulfilled | `2aJqP7HfL1w7xwMFhrwiw95DofYXBHgrJfjmB8coRLmQxvxgfrJfrJDdfVSKKCb2nJCtQPfyDNRynww47DeAoZf8` | `4utxon9o8LPJkohPim84kjTxaq6gECjxE5Dgq22g4VAacb3zRgRGGYFk7hgxTjW8uNnA1M12r4MBnWxrB1em6T8h` | 8000 / 1592 ms |
+| tie-at-cap | `7A6P3nfiwdsGBqhqJtZ81H1bKz4HpeRFffp4X9NfzCcv` | tie at 0.03 → `earliest_slot` (509439163 vs 509439167) → seller2 → **paid, not delivered** → rejected `not_delivered` | `3m5HanqgwGDgaXzHrv3LGbHS1xmBuZgAYXw9mgqsMDLbA3EjFvq9KxCPHhA5R4WAkPFbzhSGiy4ZAcAxuVpkLiFQ` | `5cts4511LQ4LhsmoLddpiTPLQy5LmPj2kWxhhimeVfZU886JYhLJQNuTqQeLxbZrB8NeFNdj7VZNC8ECmTfqaUpf` | not measured (nothing delivered) |
+
+### Incident: paid but not delivered (tie-at-cap, rfq `7A6P3nfi…`)
+
+- 05:45:42Z the buyer sent the paid request; the seller answered **HTTP 402 with an empty body**.
+- 05:45:45Z (slot 509439578) the transfer buyer → seller2, 0.03 USDC, fee payer = x402.org facilitator `CKPKJWNd…`, **succeeded** (`3m5Hanqg…`).
+- Cause (assessment): with x402 v2 exact on SVM the buyer signs the transfer and the facilitator pays the fee and submits it.
+  The seller's middleware waits for the facilitator's `/settle` answer before returning the body. When submission→confirmation
+  outlasts that wait, the seller returns 402 although the tx is already in flight and later confirms. No error in the buyer or
+  seller logic: it is the gap between the settle wait and Solana confirmation time, surfacing as "paid, not delivered".
+  This is structural to settle-before-response per-call payment; the market does not refund (no escrow), it records.
+- Recorded on-chain after upgrade 2 (reason code 5 `not_delivered`). Because this run predates the buyer-signature logging, the
+  payment was matched post hoc: buyer signed the tx (buyer signature `5KpyFq4k9zUFNLGUKazm8XbvR7JsQtqodB5HDnGe2vZP3KxayGLNLPr76nsC8mAR2iHpzCAWi1k2N5LkoXhoj4HH`),
+  TransferChecked of exactly quote.price in the configured mint, authority = buyer, destination owned by the awarded seller,
+  not cited by any other record. From now on the buyer logs its own signature (`x402_payment_sent`) before the paid call and
+  matches the landed tx by that signature (the tx id is the facilitator's signature and is not known in advance).
+- Indexer: `/rejections` → `not_delivered`, `verified: true`; a payment tx may back only one fulfillment/rejection.
+
+`/stats` after this (all 13 devnet RFQs): fulfilled 7, rejected 2 (schema_mismatch 1, not_delivered 1), cancelled 4, open/awarded 0;
+fees 0.003100 USDC. `/sellers`: seller1 fulfilled 3 / rejected 1 (schema_mismatch); seller2 fulfilled 4 / rejected 1 (not_delivered).
