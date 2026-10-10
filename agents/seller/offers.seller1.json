@@ -1,0 +1,31 @@
+{
+  "name": "seller1",
+  "offers": [
+    {
+      "id": "catalog-summary",
+      "category": "market-data",
+      "fields": [
+        "endpoint_count",
+        "host_count",
+        "by_category",
+        "by_chain",
+        "by_source",
+        "by_price_tier"
+      ],
+      "list_price": 50000,
+      "description": "x402 ecosystem catalog summary (counts by category/chain/source/price tier) from the public endpoint catalog snapshot",
+      "sla_ms": 8000
+    },
+    {
+      "id": "host-ranking",
+      "category": "rankings",
+      "fields": [
+        "top_hosts",
+        "rank"
+      ],
+      "list_price": 30000,
+      "description": "Top x402 hosts by endpoint count and 1d tx_count",
+      "sla_ms": 8000
+    }
+  ]
+}

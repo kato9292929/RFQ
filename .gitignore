@@ -6,3 +6,5 @@ test-ledger/
 .anchor/
 *.log
 run/
+log/localnet/
+indexer/.data/

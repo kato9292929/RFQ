@@ -124,6 +124,91 @@ export type RfqMarket = {
       "args": []
     },
     {
+      "name": "declareSla",
+      "docs": [
+        "Seller declares a response-time ceiling for its quote (stored apart from",
+        "Quote so existing Quote accounts keep their layout)."
+      ],
+      "discriminator": [
+        112,
+        96,
+        134,
+        203,
+        80,
+        178,
+        168,
+        69
+      ],
+      "accounts": [
+        {
+          "name": "seller",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "quote"
+          ]
+        },
+        {
+          "name": "rfq"
+        },
+        {
+          "name": "quote",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  113,
+                  117,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "rfq"
+              },
+              {
+                "kind": "account",
+                "path": "seller"
+              }
+            ]
+          }
+        },
+        {
+          "name": "sla",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  108,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "quote"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "maxLatencyMs",
+          "type": "u32"
+        }
+      ]
+    },
+    {
       "name": "initialize",
       "discriminator": [
         175,
@@ -344,6 +429,151 @@ export type RfqMarket = {
       ]
     },
     {
+      "name": "recordLatency",
+      "docs": [
+        "Buyer records the measured latency of the paid call against the declared SLA."
+      ],
+      "discriminator": [
+        178,
+        8,
+        168,
+        152,
+        17,
+        238,
+        233,
+        90
+      ],
+      "accounts": [
+        {
+          "name": "buyer",
+          "signer": true,
+          "relations": [
+            "rfq"
+          ]
+        },
+        {
+          "name": "rfq"
+        },
+        {
+          "name": "quote"
+        },
+        {
+          "name": "sla",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  108,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "quote"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "measuredLatencyMs",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "recordRejection",
+      "docs": [
+        "Buyer paid (x402) but the delivered response failed its spec. Records the",
+        "rejection on-chain; there is no refund (no escrow by design)."
+      ],
+      "discriminator": [
+        226,
+        33,
+        91,
+        67,
+        148,
+        122,
+        96,
+        132
+      ],
+      "accounts": [
+        {
+          "name": "buyer",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "rfq"
+          ]
+        },
+        {
+          "name": "rfq",
+          "writable": true
+        },
+        {
+          "name": "quote"
+        },
+        {
+          "name": "rejection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  106,
+                  101,
+                  99,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "rfq"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "paymentSig",
+          "type": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        },
+        {
+          "name": "responseHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "reasonCode",
+          "type": "u8"
+        }
+      ]
+    },
+    {
       "name": "submitQuote",
       "discriminator": [
         230,
@@ -461,6 +691,19 @@ export type RfqMarket = {
       ]
     },
     {
+      "name": "rejection",
+      "discriminator": [
+        122,
+        175,
+        188,
+        54,
+        160,
+        21,
+        135,
+        69
+      ]
+    },
+    {
       "name": "rfq",
       "discriminator": [
         106,
@@ -472,9 +715,35 @@ export type RfqMarket = {
         234,
         58
       ]
+    },
+    {
+      "name": "sla",
+      "discriminator": [
+        93,
+        177,
+        43,
+        102,
+        221,
+        228,
+        221,
+        169
+      ]
     }
   ],
   "events": [
+    {
+      "name": "latencyRecorded",
+      "discriminator": [
+        202,
+        77,
+        242,
+        26,
+        219,
+        52,
+        6,
+        198
+      ]
+    },
     {
       "name": "quoteSubmitted",
       "discriminator": [
@@ -525,6 +794,32 @@ export type RfqMarket = {
         71,
         133,
         243
+      ]
+    },
+    {
+      "name": "rfqRejected",
+      "discriminator": [
+        143,
+        232,
+        16,
+        49,
+        236,
+        170,
+        122,
+        195
+      ]
+    },
+    {
+      "name": "slaDeclared",
+      "discriminator": [
+        81,
+        205,
+        22,
+        118,
+        121,
+        80,
+        213,
+        226
       ]
     }
   ],
@@ -598,6 +893,31 @@ export type RfqMarket = {
       "code": 6013,
       "name": "mathOverflow",
       "msg": "math overflow"
+    },
+    {
+      "code": 6014,
+      "name": "invalidReason",
+      "msg": "unknown rejection reason code"
+    },
+    {
+      "code": 6015,
+      "name": "invalidSla",
+      "msg": "max_latency_ms must be > 0"
+    },
+    {
+      "code": 6016,
+      "name": "notSeller",
+      "msg": "signer is not the quote seller"
+    },
+    {
+      "code": 6017,
+      "name": "notDelivered",
+      "msg": "RFQ has not been delivered (fulfilled or rejected)"
+    },
+    {
+      "code": 6018,
+      "name": "alreadyMeasured",
+      "msg": "latency already recorded"
     }
   ],
   "types": [
@@ -672,6 +992,34 @@ export type RfqMarket = {
       }
     },
     {
+      "name": "latencyRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "quote",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "type": "pubkey"
+          },
+          {
+            "name": "maxLatencyMs",
+            "type": "u32"
+          },
+          {
+            "name": "measuredLatencyMs",
+            "type": "u32"
+          },
+          {
+            "name": "met",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
       "name": "quote",
       "type": {
         "kind": "struct",
@@ -740,6 +1088,56 @@ export type RfqMarket = {
           {
             "name": "expiresAt",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rejection",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "rfq",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "type": "pubkey"
+          },
+          {
+            "name": "paymentSig",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "responseHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "reasonCode",
+            "type": "u8"
+          },
+          {
+            "name": "rejectedAt",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
           }
         ]
       }
@@ -894,6 +1292,104 @@ export type RfqMarket = {
           {
             "name": "deadline",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rfqRejected",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "rfq",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "type": "pubkey"
+          },
+          {
+            "name": "paymentSig",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "responseHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "reasonCode",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "sla",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "quote",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "type": "pubkey"
+          },
+          {
+            "name": "maxLatencyMs",
+            "type": "u32"
+          },
+          {
+            "name": "measuredLatencyMs",
+            "type": "u32"
+          },
+          {
+            "name": "measured",
+            "type": "bool"
+          },
+          {
+            "name": "measuredAt",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "slaDeclared",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "quote",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "type": "pubkey"
+          },
+          {
+            "name": "maxLatencyMs",
+            "type": "u32"
           }
         ]
       }

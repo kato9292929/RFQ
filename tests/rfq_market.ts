@@ -39,7 +39,7 @@ describe("rfq_market", () => {
     const rfq = P.rfq(buyer.publicKey, nonce);
     await program.methods
       .postRfq(new BN(nonce.toString()), [...sha256(spec)], "http://indexer/specs/x", new BN(maxPrice), new BN(now() + deadlineIn))
-      .accounts({ buyer: buyer.publicKey })
+      .accountsPartial({ buyer: buyer.publicKey })
       .signers([buyer])
       .rpc();
     return rfq;
@@ -49,7 +49,7 @@ describe("rfq_market", () => {
     const uri = `http://seller/${seller.publicKey.toBase58().slice(0, 6)}/q/${rfq.toBase58()}`;
     await program.methods
       .submitQuote(new BN(price), [...sha256(uri)], uri, new BN(now() + 3600))
-      .accounts({ seller: seller.publicKey, rfq })
+      .accountsPartial({ seller: seller.publicKey, rfq })
       .signers([seller])
       .rpc();
     return P.quote(rfq, seller.publicKey);
@@ -77,7 +77,7 @@ describe("rfq_market", () => {
 
     await program.methods
       .initialize(100, mint, treasury)
-      .accounts({ authority: authority.publicKey, usdcMint: mint, treasury })
+      .accountsPartial({ authority: authority.publicKey, usdcMint: mint, treasury })
       .rpc();
     const cfg = await program.account.config.fetch(P.config());
     expect(cfg.feeBps).to.eq(100);
@@ -98,7 +98,7 @@ describe("rfq_market", () => {
     const buyerBefore = (await getAccount(conn, buyerUsdc)).amount;
     await program.methods
       .award()
-      .accounts({ buyer: buyer.publicKey, rfq, quote: qB, buyerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: qB, buyerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
       .signers([buyer])
       .rpc();
     const after = (await getAccount(conn, treasury)).amount;
@@ -114,7 +114,7 @@ describe("rfq_market", () => {
     await expectErr(
       program.methods
         .recordFulfillment([...Buffer.alloc(64, 7)], [...sha256("x")])
-        .accounts({ buyer: buyer.publicKey, rfq, quote: qA })
+        .accountsPartial({ buyer: buyer.publicKey, rfq, quote: qA })
         .signers([buyer])
         .rpc(),
       "QuoteMismatch",
@@ -124,7 +124,7 @@ describe("rfq_market", () => {
     const respHash = sha256('{"endpoint_count":1}');
     await program.methods
       .recordFulfillment([...paymentSig], [...respHash])
-      .accounts({ buyer: buyer.publicKey, rfq, quote: qB })
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: qB })
       .signers([buyer])
       .rpc();
     r = await program.account.rfq.fetch(rfq);
@@ -151,7 +151,7 @@ describe("rfq_market", () => {
     const qA = await quote(rfq, sellerA, 70_000);
     await program.methods
       .award()
-      .accounts({ buyer: buyer.publicKey, rfq, quote: qA, buyerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: qA, buyerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
       .signers([buyer])
       .rpc();
     await expectErr(quote(rfq, sellerB, 60_000), "RfqNotOpen");
@@ -163,7 +163,7 @@ describe("rfq_market", () => {
     await expectErr(
       program.methods
         .award()
-        .accounts({ buyer: stranger.publicKey, rfq, quote: qA, buyerUsdc: strangerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
+        .accountsPartial({ buyer: stranger.publicKey, rfq, quote: qA, buyerUsdc: strangerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
         .signers([stranger])
         .rpc(),
       "NotBuyer",
@@ -176,7 +176,7 @@ describe("rfq_market", () => {
     await expectErr(
       program.methods
         .award()
-        .accounts({ buyer: buyer.publicKey, rfq, quote: qA, buyerUsdc, treasury: strangerUsdc, tokenProgram: TOKEN_PROGRAM_ID })
+        .accountsPartial({ buyer: buyer.publicKey, rfq, quote: qA, buyerUsdc, treasury: strangerUsdc, tokenProgram: TOKEN_PROGRAM_ID })
         .signers([buyer])
         .rpc(),
       "TreasuryMismatch",
@@ -186,14 +186,14 @@ describe("rfq_market", () => {
   it("cancel_rfq only while open, and only by the buyer", async () => {
     const rfq = await postRfq(100_000, 60);
     await expectErr(
-      program.methods.cancelRfq().accounts({ buyer: stranger.publicKey, rfq }).signers([stranger]).rpc(),
+      program.methods.cancelRfq().accountsPartial({ buyer: stranger.publicKey, rfq }).signers([stranger]).rpc(),
       "NotBuyer",
     );
-    await program.methods.cancelRfq().accounts({ buyer: buyer.publicKey, rfq }).signers([buyer]).rpc();
+    await program.methods.cancelRfq().accountsPartial({ buyer: buyer.publicKey, rfq }).signers([buyer]).rpc();
     expect((await program.account.rfq.fetch(rfq)).status).to.eq(3);
     await expectErr(quote(rfq, sellerA, 10_000), "RfqNotOpen");
     await expectErr(
-      program.methods.cancelRfq().accounts({ buyer: buyer.publicKey, rfq }).signers([buyer]).rpc(),
+      program.methods.cancelRfq().accountsPartial({ buyer: buyer.publicKey, rfq }).signers([buyer]).rpc(),
       "RfqNotOpen",
     );
   });
@@ -209,4 +209,131 @@ describe("rfq_market", () => {
     }
   });
 
+  async function awarded(price = 50_000) {
+    const rfq = await postRfq(100_000, 60);
+    const q = await quote(rfq, sellerA, price);
+    await program.methods
+      .award()
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: q, buyerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
+      .signers([buyer])
+      .rpc();
+    return { rfq, q };
+  }
+
+  it("record_rejection: awarded → rejected, stores reason + seller, blocks fulfillment", async () => {
+    const { rfq, q } = await awarded();
+    await expectErr(
+      program.methods
+        .recordRejection([...Buffer.alloc(64, 1)], [...sha256("bad")], 6)
+        .accountsPartial({ buyer: buyer.publicKey, rfq, quote: q })
+        .signers([buyer])
+        .rpc(),
+      "InvalidReason",
+    );
+    await expectErr(
+      program.methods
+        .recordRejection([...Buffer.alloc(64, 1)], [...sha256("bad")], 3)
+        .accountsPartial({ buyer: stranger.publicKey, rfq, quote: q })
+        .signers([stranger])
+        .rpc(),
+      "NotBuyer",
+    );
+    await program.methods
+      .recordRejection([...Buffer.alloc(64, 1)], [...sha256("bad")], 3)
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: q })
+      .signers([buyer])
+      .rpc();
+    expect((await program.account.rfq.fetch(rfq)).status).to.eq(5);
+    const [rej] = PublicKey.findProgramAddressSync([Buffer.from("rejection"), rfq.toBuffer()], program.programId);
+    const r = await program.account.rejection.fetch(rej);
+    expect(r.reasonCode).to.eq(3);
+    expect(r.seller.toBase58()).to.eq(sellerA.publicKey.toBase58());
+    await expectErr(
+      program.methods
+        .recordFulfillment([...Buffer.alloc(64, 1)], [...sha256("bad")])
+        .accountsPartial({ buyer: buyer.publicKey, rfq, quote: q })
+        .signers([buyer])
+        .rpc(),
+      "RfqNotAwarded",
+    );
+  });
+
+  it("record_rejection accepts not_delivered (5)", async () => {
+    const { rfq, q } = await awarded();
+    await program.methods
+      .recordRejection([...Buffer.alloc(64, 4)], [...sha256("")], 5)
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: q })
+      .signers([buyer])
+      .rpc();
+    const [rej] = PublicKey.findProgramAddressSync([Buffer.from("rejection"), rfq.toBuffer()], program.programId);
+    expect((await program.account.rejection.fetch(rej)).reasonCode).to.eq(5);
+  });
+
+  it("record_rejection requires an award", async () => {
+    const rfq = await postRfq(100_000, 60);
+    const q = await quote(rfq, sellerA, 10_000);
+    await expectErr(
+      program.methods
+        .recordRejection([...Buffer.alloc(64, 1)], [...sha256("x")], 1)
+        .accountsPartial({ buyer: buyer.publicKey, rfq, quote: q })
+        .signers([buyer])
+        .rpc(),
+      "RfqNotAwarded",
+    );
+  });
+
+  it("SLA: seller declares, buyer records measured latency once after delivery", async () => {
+    const rfq = await postRfq(100_000, 60);
+    const q = await quote(rfq, sellerA, 40_000);
+    // only the quote's seller can declare
+    await expectErr(
+      program.methods
+        .declareSla(500)
+        .accountsPartial({ seller: sellerB.publicKey, rfq, quote: q })
+        .signers([sellerB])
+        .rpc(),
+      "ConstraintSeeds",
+    );
+    await program.methods.declareSla(500).accountsPartial({ seller: sellerA.publicKey, rfq, quote: q }).signers([sellerA]).rpc();
+    const [slaPk] = PublicKey.findProgramAddressSync([Buffer.from("sla"), q.toBuffer()], program.programId);
+    expect((await program.account.sla.fetch(slaPk)).maxLatencyMs).to.eq(500);
+
+    await program.methods
+      .award()
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: q, buyerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
+      .signers([buyer])
+      .rpc();
+    // not delivered yet
+    await expectErr(
+      program.methods.recordLatency(120).accountsPartial({ buyer: buyer.publicKey, rfq, quote: q, sla: slaPk }).signers([buyer]).rpc(),
+      "NotDelivered",
+    );
+    await program.methods
+      .recordFulfillment([...Buffer.alloc(64, 2)], [...sha256("ok")])
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: q })
+      .signers([buyer])
+      .rpc();
+    await expectErr(
+      program.methods.recordLatency(120).accountsPartial({ buyer: stranger.publicKey, rfq, quote: q, sla: slaPk }).signers([stranger]).rpc(),
+      "NotBuyer",
+    );
+    await program.methods.recordLatency(720).accountsPartial({ buyer: buyer.publicKey, rfq, quote: q, sla: slaPk }).signers([buyer]).rpc();
+    const sla = await program.account.sla.fetch(slaPk);
+    expect(sla.measured).to.eq(true);
+    expect(sla.measuredLatencyMs).to.eq(720);
+    await expectErr(
+      program.methods.recordLatency(100).accountsPartial({ buyer: buyer.publicKey, rfq, quote: q, sla: slaPk }).signers([buyer]).rpc(),
+      "AlreadyMeasured",
+    );
+  });
+
+  it("SLA cannot be declared after the RFQ deadline", async () => {
+    const rfq = await postRfq(100_000, 3);
+    const q = await quote(rfq, sellerA, 10_000);
+    await new Promise((r) => setTimeout(r, 4500));
+    await expectErr(
+      program.methods.declareSla(500).accountsPartial({ seller: sellerA.publicKey, rfq, quote: q }).signers([sellerA]).rpc(),
+      "DeadlinePassed",
+    );
+  });
 });

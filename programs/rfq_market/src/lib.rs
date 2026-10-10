@@ -12,6 +12,16 @@ pub const STATUS_FULFILLED: u8 = 2;
 pub const STATUS_CANCELLED: u8 = 3;
 #[allow(dead_code)]
 pub const STATUS_EXPIRED: u8 = 4;
+pub const STATUS_REJECTED: u8 = 5;
+
+/// Rejection reason codes (same vocabulary as the sellers' off-chain decline reasons).
+pub const REASON_MISSING_FIELDS: u8 = 1;
+pub const REASON_STALE_DATA: u8 = 2;
+pub const REASON_SCHEMA_MISMATCH: u8 = 3;
+pub const REASON_INVALID_RESPONSE: u8 = 4;
+/// Paid (the x402 transfer landed) but nothing was delivered, e.g. the seller's
+/// middleware gave up waiting for settlement confirmation and answered 402.
+pub const REASON_NOT_DELIVERED: u8 = 5;
 
 #[program]
 pub mod rfq_market {
@@ -168,6 +178,97 @@ pub mod rfq_market {
         Ok(())
     }
 
+    /// Buyer paid (x402) but the delivered response failed its spec. Records the
+    /// rejection on-chain; there is no refund (no escrow by design).
+    pub fn record_rejection(
+        ctx: Context<RecordRejection>,
+        payment_sig: [u8; 64],
+        response_hash: [u8; 32],
+        reason_code: u8,
+    ) -> Result<()> {
+        require!(
+            (REASON_MISSING_FIELDS..=REASON_NOT_DELIVERED).contains(&reason_code),
+            RfqError::InvalidReason
+        );
+        let now = Clock::get()?.unix_timestamp;
+        let rfq = &mut ctx.accounts.rfq;
+        require!(rfq.status == STATUS_AWARDED, RfqError::RfqNotAwarded);
+        let awarded = rfq.awarded_quote.ok_or(RfqError::RfqNotAwarded)?;
+        require_keys_eq!(awarded, ctx.accounts.quote.key(), RfqError::QuoteMismatch);
+
+        let r = &mut ctx.accounts.rejection;
+        r.rfq = rfq.key();
+        r.quote = awarded;
+        r.seller = ctx.accounts.quote.seller;
+        r.payment_sig = payment_sig;
+        r.response_hash = response_hash;
+        r.reason_code = reason_code;
+        r.rejected_at = now;
+        r.bump = ctx.bumps.rejection;
+
+        rfq.status = STATUS_REJECTED;
+
+        emit!(RfqRejected {
+            rfq: r.rfq,
+            quote: r.quote,
+            seller: r.seller,
+            payment_sig,
+            response_hash,
+            reason_code,
+        });
+        Ok(())
+    }
+
+    /// Seller declares a response-time ceiling for its quote (stored apart from
+    /// Quote so existing Quote accounts keep their layout).
+    pub fn declare_sla(ctx: Context<DeclareSla>, max_latency_ms: u32) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let rfq = &ctx.accounts.rfq;
+        require!(rfq.status == STATUS_OPEN, RfqError::RfqNotOpen);
+        require!(now < rfq.deadline, RfqError::DeadlinePassed);
+        require!(max_latency_ms > 0, RfqError::InvalidSla);
+
+        let sla = &mut ctx.accounts.sla;
+        sla.quote = ctx.accounts.quote.key();
+        sla.seller = ctx.accounts.seller.key();
+        sla.max_latency_ms = max_latency_ms;
+        sla.measured_latency_ms = 0;
+        sla.measured = false;
+        sla.measured_at = 0;
+        sla.bump = ctx.bumps.sla;
+
+        emit!(SlaDeclared { quote: sla.quote, seller: sla.seller, max_latency_ms });
+        Ok(())
+    }
+
+    /// Buyer records the measured latency of the paid call against the declared SLA.
+    pub fn record_latency(ctx: Context<RecordLatency>, measured_latency_ms: u32) -> Result<()> {
+        let rfq = &ctx.accounts.rfq;
+        require!(
+            rfq.status == STATUS_FULFILLED || rfq.status == STATUS_REJECTED,
+            RfqError::NotDelivered
+        );
+        require_keys_eq!(
+            rfq.awarded_quote.ok_or(RfqError::RfqNotAwarded)?,
+            ctx.accounts.quote.key(),
+            RfqError::QuoteMismatch
+        );
+        let sla = &mut ctx.accounts.sla;
+        require!(!sla.measured, RfqError::AlreadyMeasured);
+        sla.measured_latency_ms = measured_latency_ms;
+        sla.measured = true;
+        sla.measured_at = Clock::get()?.unix_timestamp;
+
+        emit!(LatencyRecorded {
+            quote: sla.quote,
+            seller: sla.seller,
+            max_latency_ms: sla.max_latency_ms,
+            measured_latency_ms,
+            met: measured_latency_ms <= sla.max_latency_ms,
+        });
+        Ok(())
+    }
+
     pub fn cancel_rfq(ctx: Context<CancelRfq>) -> Result<()> {
         let rfq = &mut ctx.accounts.rfq;
         require!(rfq.status == STATUS_OPEN, RfqError::RfqNotOpen);
@@ -226,6 +327,31 @@ pub struct Fulfillment {
     pub payment_sig: [u8; 64],
     pub response_hash: [u8; 32],
     pub fulfilled_at: i64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Rejection {
+    pub rfq: Pubkey,
+    pub quote: Pubkey,
+    pub seller: Pubkey,
+    pub payment_sig: [u8; 64],
+    pub response_hash: [u8; 32],
+    pub reason_code: u8,
+    pub rejected_at: i64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Sla {
+    pub quote: Pubkey,
+    pub seller: Pubkey,
+    pub max_latency_ms: u32,
+    pub measured_latency_ms: u32,
+    pub measured: bool,
+    pub measured_at: i64,
     pub bump: u8,
 }
 
@@ -325,6 +451,59 @@ pub struct CancelRfq<'info> {
     pub rfq: Account<'info, Rfq>,
 }
 
+#[derive(Accounts)]
+pub struct RecordRejection<'info> {
+    #[account(mut)]
+    pub buyer: Signer<'info>,
+    #[account(mut, has_one = buyer @ RfqError::NotBuyer)]
+    pub rfq: Account<'info, Rfq>,
+    #[account(constraint = quote.rfq == rfq.key() @ RfqError::QuoteMismatch)]
+    pub quote: Account<'info, Quote>,
+    #[account(
+        init,
+        payer = buyer,
+        space = 8 + Rejection::INIT_SPACE,
+        seeds = [b"rejection", rfq.key().as_ref()],
+        bump
+    )]
+    pub rejection: Account<'info, Rejection>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct DeclareSla<'info> {
+    #[account(mut)]
+    pub seller: Signer<'info>,
+    pub rfq: Account<'info, Rfq>,
+    #[account(
+        seeds = [b"quote", rfq.key().as_ref(), seller.key().as_ref()],
+        bump = quote.bump,
+        has_one = seller @ RfqError::NotSeller,
+        constraint = quote.rfq == rfq.key() @ RfqError::QuoteMismatch
+    )]
+    pub quote: Account<'info, Quote>,
+    #[account(
+        init,
+        payer = seller,
+        space = 8 + Sla::INIT_SPACE,
+        seeds = [b"sla", quote.key().as_ref()],
+        bump
+    )]
+    pub sla: Account<'info, Sla>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RecordLatency<'info> {
+    pub buyer: Signer<'info>,
+    #[account(has_one = buyer @ RfqError::NotBuyer)]
+    pub rfq: Account<'info, Rfq>,
+    #[account(constraint = quote.rfq == rfq.key() @ RfqError::QuoteMismatch)]
+    pub quote: Account<'info, Quote>,
+    #[account(mut, seeds = [b"sla", quote.key().as_ref()], bump = sla.bump)]
+    pub sla: Account<'info, Sla>,
+}
+
 // ---------------------------------------------------------------- events
 
 #[event]
@@ -363,6 +542,32 @@ pub struct RfqFulfilled {
     pub response_hash: [u8; 32],
 }
 
+#[event]
+pub struct RfqRejected {
+    pub rfq: Pubkey,
+    pub quote: Pubkey,
+    pub seller: Pubkey,
+    pub payment_sig: [u8; 64],
+    pub response_hash: [u8; 32],
+    pub reason_code: u8,
+}
+
+#[event]
+pub struct SlaDeclared {
+    pub quote: Pubkey,
+    pub seller: Pubkey,
+    pub max_latency_ms: u32,
+}
+
+#[event]
+pub struct LatencyRecorded {
+    pub quote: Pubkey,
+    pub seller: Pubkey,
+    pub max_latency_ms: u32,
+    pub measured_latency_ms: u32,
+    pub met: bool,
+}
+
 // ---------------------------------------------------------------- errors
 
 #[error_code]
@@ -395,4 +600,14 @@ pub enum RfqError {
     RfqNotAwarded,
     #[msg("math overflow")]
     MathOverflow,
+    #[msg("unknown rejection reason code")]
+    InvalidReason,
+    #[msg("max_latency_ms must be > 0")]
+    InvalidSla,
+    #[msg("signer is not the quote seller")]
+    NotSeller,
+    #[msg("RFQ has not been delivered (fulfilled or rejected)")]
+    NotDelivered,
+    #[msg("latency already recorded")]
+    AlreadyMeasured,
 }

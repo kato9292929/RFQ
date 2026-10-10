@@ -1,0 +1,1 @@
+{"category":"rankings","fields":["top_hosts"],"freshness_hours":24,"schema":{"type":"object","required":["top_hosts"],"properties":{"top_hosts":{"type":"array","minItems":50}}}}
