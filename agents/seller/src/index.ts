@@ -12,11 +12,14 @@ import { ExactSvmScheme } from "@x402/svm/exact/server";
 import {
   FACILITATOR_URL, INDEXER_URL, ROOT, RPC_URL, X402_NETWORK,
   appendLog, connection, env, explorerTx, fmtUsdc, loadKeypair, pdas, program, sha256, sleep,
+  type Reason,
 } from "../../../lib/common.js";
 
 const { BN } = anchor;
 
-type Offer = { id: string; category: string; fields: string[]; list_price: number; description: string };
+// sla_ms: response-time ceiling this seller declares on-chain for quotes from this offer
+// (end-to-end paid call as the buyer measures it, including x402 settlement).
+type Offer = { id: string; category: string; fields: string[]; list_price: number; sla_ms?: number; description: string };
 type Spec = { category: string; fields?: string[]; freshness_hours?: number };
 type Deal = { rfq: string; offer: Offer; spec: Spec; price: bigint; quote: string };
 
@@ -43,16 +46,24 @@ function snapshot(): Record<string, any> {
   return JSON.parse(readFileSync(snapshotPath, "utf8"));
 }
 
-function matchOffer(spec: Spec): { offer?: Offer; reason: string } {
-  const offer = offersFile.offers.find(
-    (o) => o.category === spec.category && (spec.fields ?? []).every((f) => o.fields.includes(f)),
-  );
-  if (!offer) return { reason: `no offer for category=${spec.category} fields=${(spec.fields ?? []).join(",")}` };
+// Pre-quote checks: category, field names, freshness. JSON-Schema constraints in the
+// spec (minItems, types, ...) are deliberately NOT checked here — they are the
+// buyer's acceptance test after delivery.
+function matchOffer(spec: Spec): { offer?: Offer; reason: Reason | "match"; detail: string } {
+  const sameCat = offersFile.offers.filter((o) => o.category === spec.category);
+  if (!sameCat.length) return { reason: "category_unsupported", detail: `no offer for category=${spec.category}` };
+  const offer = sameCat.find((o) => (spec.fields ?? []).every((f) => o.fields.includes(f)));
+  if (!offer) {
+    const have = new Set(sameCat.flatMap((o) => o.fields));
+    const missing = (spec.fields ?? []).filter((f) => !have.has(f));
+    return { reason: "missing_fields", detail: `category=${spec.category} lacks fields ${missing.join(",")}` };
+  }
   if (spec.freshness_hours !== undefined) {
     const ageH = (Date.now() - Date.parse(snapshot().source.generated_at)) / 3_600_000;
-    if (ageH > spec.freshness_hours) return { reason: `snapshot is ${ageH.toFixed(1)}h old > freshness_hours=${spec.freshness_hours}` };
+    if (ageH > spec.freshness_hours)
+      return { reason: "stale_data", detail: `snapshot is ${ageH.toFixed(1)}h old > freshness_hours=${spec.freshness_hours}` };
   }
-  return { offer, reason: "match" };
+  return { offer, reason: "match", detail: "" };
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -83,12 +94,12 @@ async function pollOnce() {
       log(`skip ${r.pubkey}: ${e.message}`);
       continue;
     }
-    const { offer, reason } = matchOffer(spec);
+    const { offer, reason, detail } = matchOffer(spec);
     if (!offer) {
       if (!declined.has(r.pubkey)) {
         declined.add(r.pubkey);
-        log(`decline ${r.pubkey}: ${reason}`);
-        appendLog({ actor: NAME, step: "decline", rfq: r.pubkey, seller: me.toBase58(), reason, spec });
+        log(`decline ${r.pubkey}: ${reason} (${detail})`);
+        appendLog({ actor: NAME, step: "decline", rfq: r.pubkey, seller: me.toBase58(), reason, detail, spec });
       }
       continue;
     }
@@ -100,12 +111,17 @@ async function pollOnce() {
       const sig = await prog.methods
         .submitQuote(new BN(price.toString()), [...sha256(endpointUri)], endpointUri, new BN(expiresAt))
         .accountsPartial({ seller: me, rfq })
+        // SLA (if this offer declares one) goes in the same transaction as the quote.
+        .postInstructions(
+          offer.sla_ms ? [await prog.methods.declareSla(offer.sla_ms).accountsPartial({ seller: me, rfq, quote: quotePda }).instruction()] : [],
+        )
         .rpc();
       deals.set(r.pubkey, { rfq: r.pubkey, offer, spec, price, quote: quotePda.toBase58() });
-      log(`quoted ${r.pubkey} offer=${offer.id} price=${fmtUsdc(price)} USDC tx=${sig}`);
+      log(`quoted ${r.pubkey} offer=${offer.id} price=${fmtUsdc(price)} USDC sla_ms=${offer.sla_ms ?? "-"} tx=${sig}`);
       appendLog({
         actor: NAME, step: "submit_quote", rfq: r.pubkey, quote: quotePda.toBase58(), seller: me.toBase58(),
         offer: offer.id, price: price.toString(), price_usdc: fmtUsdc(price), endpoint_uri: endpointUri,
+        sla_ms: offer.sla_ms ?? null, sla: offer.sla_ms ? P.sla(quotePda).toBase58() : null,
         expires_at: expiresAt, tx: sig, explorer: explorerTx(sig),
       });
     } catch (e: any) {

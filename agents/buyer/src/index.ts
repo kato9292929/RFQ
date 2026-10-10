@@ -1,6 +1,7 @@
 // Buyer agent: posts an RFQ, collects quotes until the deadline, awards the
 // cheapest (ties → earliest), pays the winner exactly once over x402, and
 // records the fulfillment on-chain. Every step is appended to log/YYYY-MM-DD.jsonl.
+import { randomInt } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import anchor from "@coral-xyz/anchor";
@@ -10,9 +11,11 @@ import { getAssociatedTokenAddressSync, getAccount, TOKEN_PROGRAM_ID } from "@so
 import { createKeyPairSignerFromBytes } from "@solana/kit";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { ExactSvmScheme } from "@x402/svm/exact/client";
+import { Ajv } from "ajv";
 import {
   INDEXER_URL, ROOT, RPC_URL, X402_NETWORK,
-  appendLog, connection, env, explorerTx, fmtUsdc, loadKeypair, pdas, program, retry, sha256, sleep,
+  REASONS, appendLog, connection, env, explorerTx, fmtUsdc, loadKeypair, pdas, program, retry, sha256, sleep,
+  type Reason,
 } from "../../../lib/common.js";
 
 const { BN } = anchor;
@@ -73,26 +76,69 @@ while (Math.floor(Date.now() / 1000) < deadline) {
   await sleep(3000);
 }
 const detail = await retry(() => json<any>(`${INDEXER_URL()}/rfqs/${rfq.toBase58()}`), "indexer rfq detail");
+const spec = JSON.parse(specText) as {
+  category: string; fields?: string[]; freshness_hours?: number; max_latency_ms?: number; schema?: object;
+};
 const nowS = Math.floor(Date.now() / 1000);
-const candidates = (detail.quotes as any[])
-  .filter((q) => q.expires_at > nowS + 30 && q.endpoint_hash_ok && BigInt(q.price) <= MAX_PRICE)
-  .sort((a, b) => {
-    const d = BigInt(a.price) - BigInt(b.price);
-    if (d !== 0n) return d < 0n ? -1 : 1;
-    return a.created_at - b.created_at || a.pubkey.localeCompare(b.pubkey);
-  });
+const excluded: { quote: string; seller: string; why: string }[] = [];
+const eligible = (detail.quotes as any[]).filter((q) => {
+  const why =
+    q.expires_at <= nowS + 30 ? "quote expires too soon"
+    : !q.endpoint_hash_ok ? "endpoint_hash does not match endpoint_uri"
+    : BigInt(q.price) > MAX_PRICE ? "price above max_price"
+    : spec.max_latency_ms !== undefined && !q.sla ? `no SLA declared (spec max_latency_ms=${spec.max_latency_ms})`
+    : spec.max_latency_ms !== undefined && q.sla.max_latency_ms > spec.max_latency_ms
+      ? `SLA ${q.sla.max_latency_ms}ms > spec max_latency_ms=${spec.max_latency_ms}`
+    : "";
+  if (why) excluded.push({ quote: q.pubkey, seller: q.seller, why });
+  return !why;
+});
+
+/** Slot of the transaction that created the quote (oldest signature touching the PDA). */
+async function creationSlot(quote: string): Promise<number> {
+  const sigs = await retry(() => conn.getSignaturesForAddress(new PublicKey(quote), { limit: 20 }), "getSignaturesForAddress");
+  return sigs.length ? sigs[sigs.length - 1].slot : Number.MAX_SAFE_INTEGER;
+}
+
+// Cheapest wins. Equal price → earlier creation slot. Same slot → uniform random
+// (a pubkey-order tie-break would let vanity keys win every tie).
+let tieBreak: Record<string, unknown> | null = null;
+let win: any = undefined;
+if (eligible.length) {
+  const best = eligible.reduce((m, q) => (BigInt(q.price) < m ? BigInt(q.price) : m), BigInt(eligible[0].price));
+  const tied = eligible.filter((q) => BigInt(q.price) === best);
+  if (tied.length === 1) win = tied[0];
+  else {
+    const slots = await Promise.all(tied.map(async (q) => ({ q, slot: await creationSlot(q.pubkey) })));
+    const minSlot = Math.min(...slots.map((x) => x.slot));
+    const first = slots.filter((x) => x.slot === minSlot);
+    const pick = first.length === 1 ? 0 : randomInt(first.length);
+    win = first[pick].q;
+    tieBreak = {
+      method: first.length === 1 ? "earliest_slot" : "random_within_slot",
+      candidates: slots.map((x) => ({ quote: x.q.pubkey, seller: x.q.seller, slot: x.slot })),
+      ...(first.length > 1 ? { random_index: pick, of: first.length } : {}),
+    };
+  }
+}
 record("quotes_collected", {
   rfq: rfq.toBase58(),
-  quotes: detail.quotes.map((q: any) => ({ quote: q.pubkey, seller: q.seller, price: q.price, endpoint_uri: q.endpoint_uri, created_at: q.created_at })),
+  quotes: detail.quotes.map((q: any) => ({
+    quote: q.pubkey, seller: q.seller, price: q.price, endpoint_uri: q.endpoint_uri, created_at: q.created_at,
+    sla_ms: q.sla?.max_latency_ms ?? null,
+  })),
+  excluded,
+  tie_break: tieBreak,
 });
-if (!candidates.length) {
-  log("no valid quotes — cancelling RFQ");
+if (!win) {
+  log(`no valid quotes — cancelling RFQ${excluded.length ? ` (excluded: ${excluded.map((e) => e.why).join("; ")})` : ""}`);
   const sig = await prog.methods.cancelRfq().accountsPartial({ buyer: me, rfq }).rpc();
-  record("cancel_rfq", { rfq: rfq.toBase58(), tx: sig, explorer: explorerTx(sig) });
+  record("cancel_rfq", { rfq: rfq.toBase58(), excluded, tx: sig, explorer: explorerTx(sig) });
   process.exit(2);
 }
-const win = candidates[0];
-log(`winner ${win.seller} price=${win.price_usdc} USDC of ${detail.quotes.length} quote(s)`);
+log(`winner ${win.seller} price=${win.price_usdc} USDC sla=${win.sla?.max_latency_ms ?? "-"}ms of ${detail.quotes.length} quote(s)` +
+  (excluded.length ? `; excluded: ${excluded.map((e) => `${e.seller.slice(0, 6)} (${e.why})`).join(", ")}` : "") +
+  (tieBreak ? `; tie-break=${tieBreak.method}` : ""));
 
 // 4. award (pays the 1% taker fee to the treasury inside the program)
 const buyerUsdc = getAssociatedTokenAddressSync(cfg.usdcMint, me);
@@ -138,8 +184,12 @@ log(`402 received: ${req0.scheme} ${req0.network} amount=${req0.amount} asset=${
 record("x402_payment_required", { rfq: rfq.toBase58(), endpoint_uri: win.endpoint_uri, accepts: required.accepts });
 
 const payload = await http.createPaymentPayload(required);
+// Measured latency = the paid call end to end (request → settled response body), which
+// is what the seller's declared SLA covers.
+const t0 = performance.now();
 const paid = await fetch(win.endpoint_uri, { headers: http.encodePaymentSignatureHeader(payload) });
 const bodyBytes = Buffer.from(await paid.arrayBuffer());
+const latencyMs = Math.round(performance.now() - t0);
 if (paid.status !== 200) throw new Error(`paid request failed ${paid.status}: ${bodyBytes.toString().slice(0, 500)}`);
 const settle = http.getPaymentSettleResponse((n) => paid.headers.get(n));
 if (!settle.success || !settle.transaction) throw new Error(`settlement failed: ${JSON.stringify(settle)}`);
@@ -148,32 +198,89 @@ log(`paid ${fmtUsdc(win.price)} USDC tx=${settle.transaction} response_sha256=${
 record("x402_paid", {
   rfq: rfq.toBase58(), seller: win.seller, amount: win.price, amount_usdc: win.price_usdc, network: settle.network,
   payment_tx: settle.transaction, explorer: explorerTx(settle.transaction), payer: settle.payer,
-  response_sha256: responseHash.toString("hex"), response_bytes: bodyBytes.length,
+  response_sha256: responseHash.toString("hex"), response_bytes: bodyBytes.length, latency_ms: latencyMs,
   response_preview: bodyBytes.toString("utf8").slice(0, 400),
 });
 
-// 6. record_fulfillment
+// 6. acceptance test → record_fulfillment or record_rejection
+function accept(): { ok: true } | { ok: false; reason: Reason; detail: unknown } {
+  let body: any;
+  try {
+    body = JSON.parse(bodyBytes.toString("utf8"));
+  } catch {
+    return { ok: false, reason: "invalid_response", detail: "body is not JSON" };
+  }
+  const data = body?.data;
+  if (!data || typeof data !== "object") return { ok: false, reason: "invalid_response", detail: "no data object" };
+  const missing = (spec.fields ?? []).filter((f) => data[f] === undefined || data[f] === null);
+  if (missing.length) return { ok: false, reason: "missing_fields", detail: { missing } };
+  if (spec.freshness_hours !== undefined) {
+    const gen = Date.parse(body?.source?.generated_at ?? "");
+    const ageH = (Date.now() - gen) / 3_600_000;
+    if (!Number.isFinite(ageH) || ageH > spec.freshness_hours)
+      return { ok: false, reason: "stale_data", detail: { generated_at: body?.source?.generated_at, age_hours: ageH } };
+  }
+  if (spec.schema) {
+    const validate = new Ajv({ allErrors: true, strict: false }).compile(spec.schema);
+    if (!validate(data)) return { ok: false, reason: "schema_mismatch", detail: validate.errors };
+  }
+  return { ok: true };
+}
+const verdict = accept();
 const sigBytes = bs58.decode(settle.transaction);
 if (sigBytes.length !== 64) throw new Error(`payment signature is ${sigBytes.length} bytes, expected 64`);
-const fulfilSig = await prog.methods
-  .recordFulfillment([...sigBytes], [...responseHash])
-  .accountsPartial({ buyer: me, rfq, quote: new PublicKey(win.pubkey) })
-  .rpc();
-log(`record_fulfillment tx=${fulfilSig}`);
-record("record_fulfillment", {
-  rfq: rfq.toBase58(), fulfillment: P.fulfillment(rfq).toBase58(), payment_tx: settle.transaction,
-  response_sha256: responseHash.toString("hex"), tx: fulfilSig, explorer: explorerTx(fulfilSig),
-});
+const quotePk = new PublicKey(win.pubkey);
 
-// 7. ask the indexer to verify the payment against the chain
+if (verdict.ok) {
+  const fulfilSig = await prog.methods
+    .recordFulfillment([...sigBytes], [...responseHash])
+    .accountsPartial({ buyer: me, rfq, quote: quotePk })
+    .rpc();
+  log(`record_fulfillment tx=${fulfilSig}`);
+  record("record_fulfillment", {
+    rfq: rfq.toBase58(), fulfillment: P.fulfillment(rfq).toBase58(), payment_tx: settle.transaction,
+    response_sha256: responseHash.toString("hex"), tx: fulfilSig, explorer: explorerTx(fulfilSig),
+  });
+} else {
+  const code = REASONS[verdict.reason].code;
+  const rejSig = await prog.methods
+    .recordRejection([...sigBytes], [...responseHash], code)
+    .accountsPartial({ buyer: me, rfq, quote: quotePk })
+    .rpc();
+  log(`record_rejection reason=${verdict.reason}(${code}) tx=${rejSig} — paid, no refund (no escrow)`);
+  record("record_rejection", {
+    rfq: rfq.toBase58(), rejection: P.rejection(rfq).toBase58(), seller: win.seller, payment_tx: settle.transaction,
+    response_sha256: responseHash.toString("hex"), reason: verdict.reason, reason_code: code, detail: verdict.detail,
+    tx: rejSig, explorer: explorerTx(rejSig),
+  });
+}
+
+// 7. measured latency against the declared SLA (if the seller declared one)
+const slaPk = P.sla(quotePk);
+if (await prog.account.sla.fetchNullable(slaPk)) {
+  const latSig = await prog.methods.recordLatency(latencyMs).accountsPartial({ buyer: me, rfq, quote: quotePk, sla: slaPk }).rpc();
+  const sla = await prog.account.sla.fetch(slaPk);
+  const met = latencyMs <= sla.maxLatencyMs;
+  log(`record_latency measured=${latencyMs}ms declared=${sla.maxLatencyMs}ms met=${met} tx=${latSig}`);
+  record("record_latency", {
+    rfq: rfq.toBase58(), quote: win.pubkey, sla: slaPk.toBase58(), declared_ms: sla.maxLatencyMs, measured_ms: latencyMs, met,
+    tx: latSig, explorer: explorerTx(latSig),
+  });
+}
+
+// 8. ask the indexer to verify the payment against the chain
+const endpoint = verdict.ok ? "fulfillments" : "rejections";
 let mine: any;
 for (let i = 0; i < 10; i++) {
-  const all = await json<any[]>(`${INDEXER_URL()}/fulfillments`).catch(() => [] as any[]);
+  const all = await json<any[]>(`${INDEXER_URL()}/${endpoint}`).catch(() => [] as any[]);
   mine = all.find((f) => f.rfq === rfq.toBase58());
   if (mine?.verified) break;
   await sleep(3000);
 }
-record("indexer_verification", { rfq: rfq.toBase58(), verified: mine?.verified ?? false, verification: mine?.verification });
+record("indexer_verification", {
+  rfq: rfq.toBase58(), outcome: verdict.ok ? "fulfilled" : "rejected", verified: mine?.verified ?? false, verification: mine?.verification,
+});
 console.log(JSON.stringify(mine, null, 2));
-log(`verified=${mine?.verified}`);
-process.exit(mine?.verified ? 0 : 1);
+log(`outcome=${verdict.ok ? "fulfilled" : "rejected"} payment verified=${mine?.verified}`);
+// exit: 0 fulfilled+verified, 3 rejected (payment verified), 1 anything unverified
+process.exit(!mine?.verified ? 1 : verdict.ok ? 0 : 3);

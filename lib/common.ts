@@ -17,7 +17,25 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const SOLANA_DEVNET_CAIP2 = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 export const DEVNET_USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 
-export const STATUS = ["open", "awarded", "fulfilled", "cancelled", "expired"] as const;
+export const STATUS = ["open", "awarded", "fulfilled", "cancelled", "expired", "rejected"] as const;
+
+/**
+ * One vocabulary for "why no trade / why not accepted":
+ *  - sellers use it (off-chain, logged) when declining to quote,
+ *  - buyers use the on-chain codes when rejecting a paid delivery.
+ * Sellers check category/field names/freshness before quoting; they do NOT check
+ * JSON-Schema constraints (e.g. minItems) — those are the buyer's acceptance test.
+ */
+export const REASONS = {
+  category_unsupported: { code: 0, onchain: false },
+  missing_fields: { code: 1, onchain: true },
+  stale_data: { code: 2, onchain: true },
+  schema_mismatch: { code: 3, onchain: true },
+  invalid_response: { code: 4, onchain: true },
+} as const;
+export type Reason = keyof typeof REASONS;
+export const reasonByCode = (c: number): Reason | "unknown" =>
+  (Object.entries(REASONS).find(([, v]) => v.code === c)?.[0] as Reason) ?? "unknown";
 
 export function env(name: string, fallback?: string): string {
   const v = process.env[name] ?? fallback;
@@ -69,6 +87,8 @@ export function pdas(programId: PublicKey) {
     rfq: (buyer: PublicKey, nonce: bigint | number) => find([Buffer.from("rfq"), buyer.toBuffer(), u64le(nonce)]),
     quote: (rfq: PublicKey, seller: PublicKey) => find([Buffer.from("quote"), rfq.toBuffer(), seller.toBuffer()]),
     fulfillment: (rfq: PublicKey) => find([Buffer.from("fulfillment"), rfq.toBuffer()]),
+    rejection: (rfq: PublicKey) => find([Buffer.from("rejection"), rfq.toBuffer()]),
+    sla: (quote: PublicKey) => find([Buffer.from("sla"), quote.toBuffer()]),
   };
 }
 

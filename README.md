@@ -47,6 +47,21 @@ log/                   追記専用の実行記録（deploy.md, YYYY-MM-DD.jsonl
 | `award()` | buyer | has_one buyer、status == Open、quote ∈ rfq、quote 未失効、treasury == config.treasury、buyer_usdc の mint/owner。手数料を CPI 転送 |
 | `record_fulfillment(payment_sig, response_hash)` | buyer | status == Awarded、quote == awarded_quote（payment_sig の内容は検証しない → indexer で検証） |
 | `cancel_rfq()` | buyer | status == Open |
+| `record_rejection(payment_sig, response_hash, reason_code)` | buyer | status == Awarded、quote == awarded_quote、reason_code ∈ 1..4 → Rejection PDA `["rejection", rfq]`、status = 5 Rejected |
+| `declare_sla(max_latency_ms)` | seller | quote の seller、status == Open、now < deadline → Sla PDA `["sla", quote]`（見積もりと同じ tx で送る） |
+| `record_latency(measured_latency_ms)` | buyer | status ∈ {Fulfilled, Rejected}、quote == awarded_quote、未記録 |
+
+SLA と拒否は別 PDA に置いており、既存の Config / Rfq / Quote / Fulfillment のレイアウトは初版から変わっていません（アップグレード後も旧アカウントをそのまま読めます）。
+
+**市場が保証するもの**: x402 は受領前に決済が終わる per-call 決済で、エスクローは置きません。したがって返金は保証しません。
+市場が持つのは「誰に約定し、納品がどうだったか（成立／理由付きの拒否、申告 SLA と実測応答時間）」の改ざんできない記録で、
+これが売り手ごとの実績（`GET /sellers`）になります。
+
+**選定ルール**（買い手）: 仕様の `max_latency_ms` を満たす SLA を申告した見積もりのうち最安。同額なら見積もり作成 tx の slot が早い方、
+同一 slot なら一様乱数（候補・slot・乱数インデックスをログに残す）。pubkey 順は使いません（vanity 鍵で同額を取り続けられるため）。
+
+**受領判定**（買い手）: JSON であること → `fields` が揃っていること → `freshness_hours` → 仕様の `schema`（JSON Schema, Ajv）。
+売り手は見積もり前にカテゴリ・項目名・鮮度だけを判定し、Schema の制約は見ません。見送り理由と拒否理由は同じ語彙です（`scenarios/README.md`）。
 
 `Expired`(4) はオンチェーンでは書き込みません。indexer が「Open・deadline 経過・有効な quote なし」を `effective_status: "expired"` として返します。
 
@@ -57,9 +72,11 @@ GET  /rfqs?status=open        受付中（Open かつ deadline 前）
 GET  /rfqs/:pubkey            RFQ 詳細 + 全 quote（価格昇順）+ fulfillment
 GET  /quotes?seller=:pubkey
 GET  /fulfillments            payment_sig / response_hash / verified / 検証詳細
+GET  /rejections              拒否（理由コード付き）。拒否でも決済は検証する（支払った上での拒否であること）
+GET  /sellers                 売り手ごとの見積もり・採択・成立・拒否（理由別）・SLA 申告/実測/遵守
 GET  /specs/:spec_hash
 POST /specs                   受け取ったバイト列をそのまま保存し SHA-256 を返す
-GET  /stats                   RFQ 数、約定率、平均約定価格、手数料累計
+GET  /stats                   同じ分母（全 RFQ）で 成立／拒否／キャンセル の 3 列、平均約定価格、手数料累計
 GET  /config, /health
 ```
 
@@ -85,6 +102,9 @@ bash scripts/e2e-localnet.sh
 #  2) buyer に devnet USDC（https://faucet.circle.com → Solana Devnet）
 bash scripts/deploy-devnet.sh     # デプロイ + Config 作成 + log/deploy.md 追記
 bash scripts/e2e-devnet.sh        # 売り手 2 体 → RFQ → 2 quote → award → x402 → fulfillment → verified
+SCENARIOS="schema-reject:100000 sla-tight:100000" bash scripts/e2e-devnet.sh   # scenarios/*.json を順に流す
+bash scripts/rehearse-upgrade-localnet.sh   # devnet の現行バイナリを載せたローカルでアップグレードを予行
+bash scripts/upgrade-devnet.sh             # 同じプログラム ID のままアップグレード（必要なら programdata を extend）
 ```
 
 ## x402 ファシリテーター

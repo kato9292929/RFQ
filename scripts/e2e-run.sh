@@ -45,8 +45,8 @@ else
     BUYER_SCENARIO=$name BUYER_SPEC_FILE=scenarios/$name.json BUYER_MAX_PRICE=$max \
       npx tsx agents/buyer/src/index.ts 2>&1 | tee "$RUN_DIR/buyer-$name.log"
     r=${PIPESTATUS[0]}
-    echo "==== scenario $name exit=$r (0=fulfilled+verified, 2=no valid quotes→cancelled) ===="
-    [ "$r" = 0 ] || [ "$r" = 2 ] || rc=1
+    echo "==== scenario $name exit=$r (0=fulfilled+verified, 2=no valid quotes→cancelled, 3=paid+rejected) ===="
+    [ "$r" = 0 ] || [ "$r" = 2 ] || [ "$r" = 3 ] || rc=1
   done
 fi
 set -e
@@ -54,6 +54,11 @@ set -e
 echo "---- GET /fulfillments ----"
 curl -s --retry 3 -m 60 "$INDEXER_URL/fulfillments" | node -e '
 let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const f of JSON.parse(s)){console.log(`${f.rfq}  price=${f.price_usdc} USDC  payment_tx=${f.payment_sig}  verified: ${f.verified}`)}})'
+echo "---- GET /rejections ----"
+curl -s --retry 3 -m 60 "$INDEXER_URL/rejections" | node -e '
+let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const f of JSON.parse(s)){console.log(`${f.rfq}  price=${f.price_usdc} USDC  reason=${f.reason}  payment_tx=${f.payment_sig}  verified: ${f.verified}`)}})'
+echo "---- GET /sellers ----"
+curl -s --retry 3 -m 60 "$INDEXER_URL/sellers"; echo
 echo "---- GET /stats ----"
 curl -s --retry 3 -m 60 "$INDEXER_URL/stats"; echo
 exit $rc

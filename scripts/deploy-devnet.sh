@@ -15,7 +15,8 @@ PROGRAM_ID=$(solana-keygen pubkey "$PROGRAM_KP")
 echo "deployer $(solana-keygen pubkey $DEPLOYER) balance: $(solana -u "$RPC_URL" balance -k $DEPLOYER)"
 
 DEPLOY_OUT=$(solana program deploy -u "$RPC_URL" -k "$DEPLOYER" --program-id "$PROGRAM_KP" \
-  target/deploy/rfq_market.so --max-sign-attempts 50 --use-rpc 2>&1 | tee /dev/stderr)
+  target/deploy/rfq_market.so --max-sign-attempts 50 --use-rpc 2>&1) || { echo "$DEPLOY_OUT"; exit 1; }
+echo "$DEPLOY_OUT"
 DEPLOY_SIG=$(echo "$DEPLOY_OUT" | sed -n 's/^Signature: //p' | tail -1)
 
 # Small SOL float for the agents (rent for quotes/fulfillment/ATAs + tx fees).

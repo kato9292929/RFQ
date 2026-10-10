@@ -1,0 +1,1 @@
+{"category":"market-data","fields":["endpoint_count","host_count"],"freshness_hours":24,"schema":{"type":"object","required":["endpoint_count","host_count"],"properties":{"endpoint_count":{"type":"integer","minimum":1},"host_count":{"type":"integer","minimum":1}}}}
