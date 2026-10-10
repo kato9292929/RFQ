@@ -41,3 +41,19 @@ Earlier aborted attempts (no quotes, cancelled, not claimed as settlements):
 `GXfbMG1MbTR3KFPtwNFQXLxEGKWX9yj9Y7BNxrcmq5JC` (cancel `Vqg9mreuUKtudA5B1bAnqyGN5WPrUd8QdBtuNUx9FAe88C4x81ZRs92Na5ZojBv7gszfqDMPtnvC5kbSx9xssVp`),
 `f6kiHA68i6bb6Tzd9DcidJrdc3rDVk4Y3A8WYDLS7pw` (cancel `3DJdpcr6kv9CrJgjjsQoFWrnpxNF31CYKTV57dUUQMyt87oW1kdUZjdJNd7kGWP6q9b7WwisgrEbZM6ij2ueXi3J`) —
 a stale local-validator indexer was still bound to :8787, so sellers never saw them. Fixed in e2e-run.sh (processes run as `node --import tsx` so cleanup kills them; ports checked before start).
+
+## Scenario runs 2026-10-10 (devnet) — own buyer + own 2 sellers
+
+Same mechanism, varied specs (`scenarios/`). 4 fulfilled with `verified: true`, 2 ended with no trade (cancelled). This shows the mechanism behaving correctly as the spec changes; it is not external demand.
+
+| scenario | rfq | quotes | outcome | award tx | x402 payment tx | fulfillment / cancel tx |
+|---|---|---|---|---|---|---|
+| single-match-seller1 | `DEu7KWKzjqCxZVoYSKEcGXFrLQwsSbyZyYc4SgQdeXXx` | 7y1XAC=0.03 | fulfilled 7y1XAC @ 0.030000, fee 0.000300, verified=true (declined: seller2: no offer for category=rankings fields=top_hosts) | `2ZV4Lkn8Q9QvVDdaYLDmHf1FTd8pLttYvRfNhmWSu5wefkuHJKiWReBEBVn6CEnGiToSGUXS3oLDGKPcvNSjebZx` | `2sAmUVnWHEvBgGWyQw4cm8FoZuPvhFEfVqcZW6oUV9coN1Bz4SydQtt7Uvp2Ft3Tqebs99yPqK155eAjE5aLTjHf` | `2DCotHpCrvnp6xx6FxgrEPpbmn123uFidwYTugp8YLZMzsk26ZNseLrXVrJQ4unoYipnFkviSHgWAzgoiLaYTZN` |
+| single-match-seller2 | `CBm9Xux3YD8NLXKcwvN3s2nxWzEMGVeJVP1sr64fG6dw` | 47xUek=0.02 | fulfilled 47xUek @ 0.020000, fee 0.000200, verified=true (declined: seller1: no offer for category=providers fields=first_party_providers) | `2dC4fbbG2PRN1Jb9tY8nbszoCeNShYWQcqLwAyNPVdVAHBT96gv5yq8B6aGdxMHNbTS7eYLkiWBiKfU7Nr1QoWey` | `3Gd4crr4uE7USuTvjywRpt12fBbRdM3VFLFKPgd91miMrfyvZR3TihKgg4nvgWqvYu78zeSHfW5YTaNxfBk1ztM7` | `2gkEP6aAiHReXPVAfEt4CcUBM8EiahKygCFKkWip13zxJhxVioPj9hxDsBHQ4wRRbH3utFhixj3qqupXgwf2GR36` |
+| no-match | `HJsDycRozgnCzgwLJvdN7yisawwrWorMYt5LHScPoG9q` | 0 | cancelled (declined: seller1: no offer for category=weather fields=temperature; seller2: no offer for category=weather fields=temperature) | — | — | `64SaEwWq2hBwuqrvj2VaQvtPRkutGG6mgzFi7wybiuDUztn9PPgTisCgZumcXAUR772toNZGrvMw6vcPcq6bYUMa` |
+| tie-at-cap | `CgqFxVUg1hRj5M9k45tb8fRZjJjwyE1GkB2asSaXfVf2` | 47xUek=0.03, 7y1XAC=0.03 | fulfilled 47xUek @ 0.030000, fee 0.000300, verified=true | `2fgj9gLADhKmFcSQVvgjLYPWq3kXeCQx59B2d9gB92xWMYpcfP6yY72qhXumPmkd25kDDYB1UHdjyPiGeNXgbAa9` | `XTq5taFH6JvkDucj3XsNw6K3qQc9KhssWEtHeYwWRX7habZ1e6QhhbjdL2fdMuLYjFjTQLFQtWHEfbCTgJMWc9Z` | `L1PFdCyvukZhm1Vwpv7Fc1ERZAAjMcSBvf12k4wqqNiKLz2v2z1cLF3szh1CtHQchzDKeKEnhqRhcpduKJVMYH9` |
+| field-subset | `HzoXppnnpBnh81svh5xTrd3geBYrruq3sXQx5x2M1NrT` | 7y1XAC=0.05 | fulfilled 7y1XAC @ 0.050000, fee 0.000500, verified=true (declined: seller2: no offer for category=market-data fields=endpoint_count,by_source) | `3WtE62MRmZHLjxeC6hHki22nWke1YbhnDLxqcgBbvC3dCpQstcjm6RLmkCV3TheCZVFmrxCLu1zM9GfZQFiAxmER` | `5zkUZiTQUqhSSxN9XnSWAjMPaZGbYga7Hnh9S7FHDRpqcYPZdDcnHKZ22itMzB5z7v6anp4AZb2hXf2wvvFVm1JB` | `49P15hYFqiXB7iNirxcWHsPBAGBNzBdfnBSSoST5T88jYzeLcZMQ72217urPpEAYtR9qTx6qPtb7KkaNiGx7FTUC` |
+| stale-data | `8cAPx9FXa8hxYHmBfFTyPam8UKFoVDg8MFt1VtM9WoCq` | 0 | cancelled (declined: seller2: snapshot is 14.8h old > freshness_hours=1; seller1: snapshot is 14.8h old > freshness_hours=1) | — | — | `39YRuPNTLHTb7qWYzSazcAmRkbFEuUv9qbWUfJAW9zGs6p8hPfZ1a5btwEukF7BmVTbHDC7HMFuYbizppHv6gs9m` |
+
+Indexer `/stats` after these runs (all devnet RFQs, incl. the 2 aborted on 10-09): `{"rfq_count":9,"quote_count":7,"by_status":{"cancelled":4,"fulfilled":5},"award_rate":0.556,"avg_awarded_price":"0.033000","fees_total_usdc":"0.001650"}`.
+tie-at-cap: both sellers quoted the 0.03 cap in the same second; the buyer tie-break (earliest created_at, then pubkey) picked seller2.
