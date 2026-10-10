@@ -31,9 +31,19 @@ app.post("/verify", async (req, res) => {
   }
 });
 
+// FACILITATOR_SIMULATE_SETTLE_TIMEOUT=N: for the first N settles, submit the transfer
+// (it lands) but answer the seller with a failure — reproduces the devnet case where
+// the seller's /settle wait expired while the tx still confirmed. Local testing only.
+let simulateTimeouts = Number(process.env.FACILITATOR_SIMULATE_SETTLE_TIMEOUT ?? "0");
+
 app.post("/settle", async (req, res) => {
   try {
     const r = await facilitator.settle(req.body.paymentPayload, req.body.paymentRequirements);
+    if (simulateTimeouts > 0 && r.success) {
+      simulateTimeouts--;
+      console.log(`[settle] SIMULATED TIMEOUT: tx ${r.transaction} landed, reporting failure to the seller`);
+      return res.status(400).json({ success: false, errorReason: "simulated settlement timeout", transaction: "", network: X402_NETWORK() });
+    }
     console.log(`[settle] success=${r.success} tx=${r.transaction} network=${r.network}`);
     res.json(r);
   } catch (e: any) {

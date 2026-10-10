@@ -14,7 +14,7 @@ import { ExactSvmScheme } from "@x402/svm/exact/client";
 import { Ajv } from "ajv";
 import {
   INDEXER_URL, ROOT, RPC_URL, X402_NETWORK,
-  REASONS, appendLog, connection, env, explorerTx, fmtUsdc, loadKeypair, pdas, program, retry, sha256, sleep,
+  REASONS, appendLog, buyerSignatureFromPayload, connection, env, explorerTx, findLandedPayment, fmtUsdc, loadKeypair, pdas, program, retry, sha256, sleep,
   type Reason,
 } from "../../../lib/common.js";
 
@@ -184,13 +184,54 @@ log(`402 received: ${req0.scheme} ${req0.network} amount=${req0.amount} asset=${
 record("x402_payment_required", { rfq: rfq.toBase58(), endpoint_uri: win.endpoint_uri, accepts: required.accepts });
 
 const payload = await http.createPaymentPayload(required);
+// Write the buyer's own signature of the payment tx before sending: it is the key
+// for finding the transfer later if the paid call does not return the data.
+const buyerPaymentSig = buyerSignatureFromPayload(payload, me);
+record("x402_payment_sent", { rfq: rfq.toBase58(), seller: win.seller, amount: win.price, buyer_signature: buyerPaymentSig });
 // Measured latency = the paid call end to end (request → settled response body), which
 // is what the seller's declared SLA covers.
 const t0 = performance.now();
 const paid = await fetch(win.endpoint_uri, { headers: http.encodePaymentSignatureHeader(payload) });
 const bodyBytes = Buffer.from(await paid.arrayBuffer());
 const latencyMs = Math.round(performance.now() - t0);
-if (paid.status !== 200) throw new Error(`paid request failed ${paid.status}: ${bodyBytes.toString().slice(0, 500)}`);
+if (paid.status !== 200) {
+  // The seller withheld the data. With x402 exact-SVM the facilitator may still land
+  // the transfer after the seller's /settle wait expired, so check the chain for the
+  // tx carrying our signature before concluding we did not pay.
+  log(`paid request returned ${paid.status}; looking for the payment tx with buyer signature ${buyerPaymentSig.slice(0, 12)}…`);
+  const landed = await findLandedPayment(conn, getAssociatedTokenAddressSync(cfg.usdcMint, me), buyerPaymentSig);
+  record("x402_paid_request_failed", {
+    rfq: rfq.toBase58(), seller: win.seller, http_status: paid.status, body: bodyBytes.toString("utf8").slice(0, 400),
+    latency_ms: latencyMs, buyer_signature: buyerPaymentSig, landed_payment_tx: landed?.signature ?? null,
+    landed_slot: landed?.slot ?? null, landed_err: landed?.err ?? null,
+  });
+  if (!landed || landed.err) {
+    log("no landed payment found — nothing paid, nothing delivered; RFQ stays awarded");
+    process.exit(1);
+  }
+  const respHash = sha256(bodyBytes);
+  const quotePk0 = new PublicKey(win.pubkey);
+  const rejSig = await prog.methods
+    .recordRejection([...bs58.decode(landed.signature)], [...respHash], REASONS.not_delivered.code)
+    .accountsPartial({ buyer: me, rfq, quote: quotePk0 })
+    .rpc();
+  log(`paid but not delivered: payment tx=${landed.signature} → record_rejection(not_delivered) tx=${rejSig}`);
+  record("record_rejection", {
+    rfq: rfq.toBase58(), rejection: P.rejection(rfq).toBase58(), seller: win.seller, payment_tx: landed.signature,
+    response_sha256: respHash.toString("hex"), reason: "not_delivered", reason_code: REASONS.not_delivered.code,
+    detail: { http_status: paid.status, matched_by: "buyer signature in payment tx", buyer_signature: buyerPaymentSig },
+    tx: rejSig, explorer: explorerTx(rejSig),
+  });
+  let v: any;
+  for (let i = 0; i < 10; i++) {
+    v = (await json<any[]>(`${INDEXER_URL()}/rejections`).catch(() => [] as any[])).find((f) => f.rfq === rfq.toBase58());
+    if (v?.verified) break;
+    await sleep(3000);
+  }
+  record("indexer_verification", { rfq: rfq.toBase58(), outcome: "rejected", verified: v?.verified ?? false, verification: v?.verification });
+  log(`outcome=rejected(not_delivered) payment verified=${v?.verified}`);
+  process.exit(v?.verified ? 3 : 1);
+}
 const settle = http.getPaymentSettleResponse((n) => paid.headers.get(n));
 if (!settle.success || !settle.transaction) throw new Error(`settlement failed: ${JSON.stringify(settle)}`);
 const responseHash = sha256(bodyBytes);

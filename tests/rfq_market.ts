@@ -224,7 +224,7 @@ describe("rfq_market", () => {
     const { rfq, q } = await awarded();
     await expectErr(
       program.methods
-        .recordRejection([...Buffer.alloc(64, 1)], [...sha256("bad")], 9)
+        .recordRejection([...Buffer.alloc(64, 1)], [...sha256("bad")], 6)
         .accountsPartial({ buyer: buyer.publicKey, rfq, quote: q })
         .signers([buyer])
         .rpc(),
@@ -256,6 +256,17 @@ describe("rfq_market", () => {
         .rpc(),
       "RfqNotAwarded",
     );
+  });
+
+  it("record_rejection accepts not_delivered (5)", async () => {
+    const { rfq, q } = await awarded();
+    await program.methods
+      .recordRejection([...Buffer.alloc(64, 4)], [...sha256("")], 5)
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: q })
+      .signers([buyer])
+      .rpc();
+    const [rej] = PublicKey.findProgramAddressSync([Buffer.from("rejection"), rfq.toBuffer()], program.programId);
+    expect((await program.account.rejection.fetch(rej)).reasonCode).to.eq(5);
   });
 
   it("record_rejection requires an award", async () => {

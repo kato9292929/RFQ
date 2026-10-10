@@ -5,7 +5,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import anchor from "@coral-xyz/anchor";
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, VersionedTransaction } from "@solana/web3.js";
+import bs58 from "bs58";
 import type { RfqMarket } from "../idl/rfq_market.js";
 
 const { AnchorProvider, Program, Wallet } = anchor;
@@ -32,6 +33,7 @@ export const REASONS = {
   stale_data: { code: 2, onchain: true },
   schema_mismatch: { code: 3, onchain: true },
   invalid_response: { code: 4, onchain: true },
+  not_delivered: { code: 5, onchain: true },
 } as const;
 export type Reason = keyof typeof REASONS;
 export const reasonByCode = (c: number): Reason | "unknown" =>
@@ -130,4 +132,47 @@ export async function retry<T>(fn: () => Promise<T>, label = "rpc", attempts = 5
     }
   }
   throw last;
+}
+
+/**
+ * The buyer's own signature inside the x402 exact-SVM payment transaction.
+ * The tx id is the fee payer's (facilitator's) signature, added only when the
+ * facilitator submits, so the buyer cannot know it in advance; its own signature
+ * is fixed once it signs and identifies the transfer uniquely.
+ */
+export function buyerSignatureFromPayload(payload: any, buyer: PublicKey): string {
+  const b64 = payload?.payload?.transaction;
+  if (typeof b64 !== "string") throw new Error("x402 payload has no payload.transaction");
+  const tx = VersionedTransaction.deserialize(Buffer.from(b64, "base64"));
+  const keys = tx.message.staticAccountKeys;
+  const idx = keys.findIndex((k) => k.equals(buyer));
+  if (idx < 0 || idx >= tx.message.header.numRequiredSignatures) throw new Error("buyer is not a signer of the payment tx");
+  const sig = tx.signatures[idx];
+  if (!sig || sig.every((b) => b === 0)) throw new Error("buyer signature missing in payment tx");
+  return bs58.encode(sig);
+}
+
+/**
+ * After a paid request failed, look for the payment tx that contains `buyerSig`
+ * among recent transactions touching the buyer's token account.
+ */
+export async function findLandedPayment(
+  conn: Connection, buyerTokenAccount: PublicKey, buyerSig: string, timeoutMs = 90_000,
+): Promise<{ signature: string; slot: number; err: unknown } | null> {
+  const seen = new Set<string>();
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const sigs = await retry(() => conn.getSignaturesForAddress(buyerTokenAccount, { limit: 20 }, "confirmed"), "getSignaturesForAddress");
+    for (const s of sigs) {
+      if (seen.has(s.signature)) continue;
+      seen.add(s.signature);
+      const tx = await retry(
+        () => conn.getTransaction(s.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }),
+        "getTransaction",
+      );
+      if (tx?.transaction.signatures.includes(buyerSig)) return { signature: s.signature, slot: s.slot, err: tx.meta?.err ?? null };
+    }
+    await sleep(3000);
+  }
+  return null;
 }

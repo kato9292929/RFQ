@@ -247,6 +247,26 @@ async function fulfillmentJson(pk: PublicKey, f: FulfillmentAcc, usdcMint: strin
   };
 }
 
+/** How many fulfillment/rejection records cite each payment tx (one payment must back one record). */
+async function paymentUseCounts(): Promise<Map<string, number>> {
+  const [fs, rs] = await Promise.all([
+    retry(() => prog.account.fulfillment.all(), "fulfillment.all"),
+    retry(() => prog.account.rejection.all(), "rejection.all"),
+  ]);
+  const m = new Map<string, number>();
+  for (const x of [...fs, ...rs]) {
+    const k = bs58.encode(Buffer.from(x.account.paymentSig));
+    m.set(k, (m.get(k) ?? 0) + 1);
+  }
+  return m;
+}
+
+function reuseGuard<T extends { payment_sig: string; verified: boolean; verification: Verification }>(rec: T, uses: Map<string, number>): T {
+  const n = uses.get(rec.payment_sig) ?? 0;
+  if (n > 1) return { ...rec, verified: false, verification: { ...rec.verification, verified: false, reason: `payment tx is cited by ${n} records` } };
+  return rec;
+}
+
 async function usdcMint(): Promise<string> {
   const [pda] = PublicKey.findProgramAddressSync([Buffer.from("config")], prog.programId);
   return (await retry(() => prog.account.config.fetch(pda), "config.fetch")).usdcMint.toBase58();
@@ -257,7 +277,8 @@ app.get(
   wrap(async (_req, res) => {
     const mint = await usdcMint();
     const all = await retry(() => prog.account.fulfillment.all(), "fulfillment.all");
-    const out = await Promise.all(all.map((f) => fulfillmentJson(f.publicKey, f.account, mint)));
+    const uses = await paymentUseCounts();
+    const out = (await Promise.all(all.map((f) => fulfillmentJson(f.publicKey, f.account, mint)))).map((r) => reuseGuard(r, uses));
     res.json(out.sort((a, b) => b.fulfilled_at - a.fulfilled_at));
   }),
 );
@@ -298,7 +319,8 @@ app.get(
   wrap(async (_req, res) => {
     const mint = await usdcMint();
     const all = await retry(() => prog.account.rejection.all(), "rejection.all");
-    const out = await Promise.all(all.map((r) => rejectionJson(r.publicKey, r.account, mint)));
+    const uses = await paymentUseCounts();
+    const out = (await Promise.all(all.map((r) => rejectionJson(r.publicKey, r.account, mint)))).map((r) => reuseGuard(r, uses));
     res.json(out.sort((a, b) => b.rejected_at - a.rejected_at));
   }),
 );

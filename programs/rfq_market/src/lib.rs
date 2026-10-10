@@ -19,6 +19,9 @@ pub const REASON_MISSING_FIELDS: u8 = 1;
 pub const REASON_STALE_DATA: u8 = 2;
 pub const REASON_SCHEMA_MISMATCH: u8 = 3;
 pub const REASON_INVALID_RESPONSE: u8 = 4;
+/// Paid (the x402 transfer landed) but nothing was delivered, e.g. the seller's
+/// middleware gave up waiting for settlement confirmation and answered 402.
+pub const REASON_NOT_DELIVERED: u8 = 5;
 
 #[program]
 pub mod rfq_market {
@@ -184,7 +187,7 @@ pub mod rfq_market {
         reason_code: u8,
     ) -> Result<()> {
         require!(
-            (REASON_MISSING_FIELDS..=REASON_INVALID_RESPONSE).contains(&reason_code),
+            (REASON_MISSING_FIELDS..=REASON_NOT_DELIVERED).contains(&reason_code),
             RfqError::InvalidReason
         );
         let now = Clock::get()?.unix_timestamp;
