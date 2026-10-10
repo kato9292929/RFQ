@@ -36,6 +36,7 @@ const me = kp.publicKey;
 const log = (...a: unknown[]) => console.log(`[${NAME}]`, ...a);
 
 const deals = new Map<string, Deal>(); // rfq pubkey → what we quoted
+const declined = new Set<string>(); // rfqs we decided not to quote (logged once)
 let usdcMint: PublicKey;
 
 function snapshot(): Record<string, any> {
@@ -74,7 +75,7 @@ async function pollOnce() {
     if (r.buyer === me.toBase58()) continue;
     const rfq = new PublicKey(r.pubkey);
     const quotePda = P.quote(rfq, me);
-    if (deals.has(r.pubkey) || (await conn.getAccountInfo(quotePda))) continue;
+    if (deals.has(r.pubkey) || declined.has(r.pubkey) || (await conn.getAccountInfo(quotePda))) continue;
     let spec: Spec;
     try {
       spec = await fetchSpec(r.spec_uri, r.spec_hash);
@@ -84,7 +85,11 @@ async function pollOnce() {
     }
     const { offer, reason } = matchOffer(spec);
     if (!offer) {
-      log(`skip ${r.pubkey}: ${reason}`);
+      if (!declined.has(r.pubkey)) {
+        declined.add(r.pubkey);
+        log(`decline ${r.pubkey}: ${reason}`);
+        appendLog({ actor: NAME, step: "decline", rfq: r.pubkey, seller: me.toBase58(), reason, spec });
+      }
       continue;
     }
     const maxPrice = BigInt(r.max_price);

@@ -31,9 +31,24 @@ wait_http http://127.0.0.1:8802/health
 
 export BUYER_KEYPAIR=${BUYER_KEYPAIR:-.keys/buyer.json}
 export BUYER_RFQ_WINDOW_SEC=${BUYER_RFQ_WINDOW_SEC:-150}
+# SCENARIOS="name:max_price name:max_price ..." runs one buyer round per entry using
+# scenarios/<name>.json; empty runs the default spec once.
+rc=0
 set +e
-npx tsx agents/buyer/src/index.ts 2>&1 | tee "$RUN_DIR/buyer.log"
-rc=${PIPESTATUS[0]}
+if [ -z "${SCENARIOS:-}" ]; then
+  npx tsx agents/buyer/src/index.ts 2>&1 | tee "$RUN_DIR/buyer.log"
+  rc=${PIPESTATUS[0]}
+else
+  for entry in $SCENARIOS; do
+    name=${entry%%:*}; max=${entry##*:}
+    echo "==== scenario $name (max_price=$max) ===="
+    BUYER_SCENARIO=$name BUYER_SPEC_FILE=scenarios/$name.json BUYER_MAX_PRICE=$max \
+      npx tsx agents/buyer/src/index.ts 2>&1 | tee "$RUN_DIR/buyer-$name.log"
+    r=${PIPESTATUS[0]}
+    echo "==== scenario $name exit=$r (0=fulfilled+verified, 2=no valid quotes→cancelled) ===="
+    [ "$r" = 0 ] || [ "$r" = 2 ] || rc=1
+  done
+fi
 set -e
 
 echo "---- GET /fulfillments ----"

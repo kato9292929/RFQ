@@ -30,7 +30,8 @@ const conn = connection();
 const me = kp.publicKey;
 const runId = `run-${Date.now()}`;
 const log = (...a: unknown[]) => console.log("[buyer]", ...a);
-const record = (step: string, data: Record<string, unknown>) => appendLog({ actor: "buyer", run: runId, step, ...data });
+const SCENARIO = process.env.BUYER_SCENARIO ?? "default";
+const record = (step: string, data: Record<string, unknown>) => appendLog({ actor: "buyer", run: runId, scenario: SCENARIO, step, ...data });
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
