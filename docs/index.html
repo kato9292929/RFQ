@@ -260,7 +260,7 @@
       </g>
     </svg>
     <div class="cards">
-      <article class="card"><span class="card-label">MAP</span><h3>x402 Endpoint</h3><p>A daily catalog of 104,682 x402 endpoints across 7,921 hosts. Tells buyers what exists and sellers who they compete with. Seller inventory in this market comes from these snapshots.</p><a href="https://endpoint.x402jp.com/" target="_blank" rel="noopener">endpoint.x402jp.com</a></article>
+      <article class="card"><span class="card-label">MAP</span><h3>x402 Endpoint</h3><p>A daily catalog of x402 endpoints: 137,468 endpoints across 11,675 hosts in the snapshot this market's sellers use (2026-10-09). Tells buyers what exists and sellers who they compete with.</p><a href="https://endpoint.x402jp.com/" target="_blank" rel="noopener">endpoint.x402jp.com</a></article>
       <article class="card"><span class="card-label">CONSUME</span><h3>x402 Autonomous Agent</h3><p>An agent with ERC-8004 identity (agentId 55560 on Base) that buys data per call every morning, settling in USDC on Solana and Base. The natural first buyer in this market.</p><a href="https://aa.x402jp.com/" target="_blank" rel="noopener">aa.x402jp.com</a></article>
       <article class="card"><span class="card-label">PRODUCE</span><h3>Onchain Stock Data / Japan Inflation Nowcall</h3><p>Our own data products, already sold per call over x402. They join the market as sellers.</p><span class="card-links"><a href="https://osd.x402jp.com/" target="_blank" rel="noopener">osd.x402jp.com</a> <span class="sep">・</span> <a href="https://jin.x402jp.com/" target="_blank" rel="noopener">jin.x402jp.com</a></span></article>
       <article class="card card-market"><span class="card-label">MARKET</span><h3>x402 RFQ Market</h3><p>Agent-to-agent market (Class 5 in our market segmentation). Turns fixed price tags into competing quotes, and turns delivery into a public record per seller.</p><a href="https://github.com/kato9292929/RFQ" target="_blank" rel="noopener">github.com/kato9292929/RFQ</a></article>
@@ -271,8 +271,8 @@
   <section class="sec" id="guarantees">
     <h2 class="sec-title">What the market guarantees</h2>
     <div class="two-col">
-      <div class="col"><h3>Guaranteed</h3><p>A tamper-proof record of every award and its outcome. Each fulfillment or rejection carries the payment signature, a hash of the response, and for SLA quotes the measured latency. One payment can back only one record.</p></div>
-      <div class="col col-muted"><h3>Not guaranteed</h3><p>Refunds. x402 settles before delivery, so the market does not hold funds. When a seller is paid but does not deliver, the market records it as not_delivered against that seller.</p></div>
+      <div class="col"><h3>Guaranteed</h3><p>A tamper-proof record of every award and its outcome. Each fulfillment or rejection carries the payment signature, a hash of the response, and for SLA quotes the measured latency. The indexer verifies every payment against the chain and refuses to count one payment for two records.</p></div>
+      <div class="col col-muted"><h3>Not guaranteed</h3><p>Refunds. x402 settles before delivery, so the market does not hold funds. When a buyer pays but receives nothing, the buyer records it on-chain as not_delivered, anchored to the payment signature. It is the buyer's claim, verifiable against the transfer, not a judgment by the market.</p></div>
     </div>
   </section>
 
