@@ -114,6 +114,7 @@
   .card { border:1.5px solid rgba(255,255,255,.22); border-radius:10px; padding:24px; min-width:0; display:flex; flex-direction:column; gap:4px; background:rgba(255,255,255,.02) }
   .card p { flex:1; margin-bottom:16px }
   .card a { align-self:flex-start; font-size:14px; overflow-wrap:anywhere }
+  .card-role { font-size:13px; color:#9a9a9a; margin:-4px 0 10px }
   .card-links { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 6px; font-size:14px }
   .card-label { font-size:12px; font-weight:600; letter-spacing:.2em; color:#9a9a9a; margin-bottom:8px }
 
@@ -190,52 +191,53 @@
     <h2 class="sec-title">What we already run</h2>
     <p class="lead">x402 Inc. already runs three things for AI agents that pay for data.</p>
     <div class="cards cards-3">
-      <article class="card"><h3>A catalog of paid APIs</h3><p>Every API that AI agents can pay for, collected daily. 137,468 endpoints from 11,675 sellers (Oct 9, 2026).</p><a href="https://endpoint.x402jp.com/" target="_blank" rel="noopener">endpoint.x402jp.com</a></article>
-      <article class="card"><h3>An agent that buys</h3><p>Our own agent buys data from these APIs every morning, paying in USDC on Solana and Base.</p><a href="https://aa.x402jp.com/" target="_blank" rel="noopener">aa.x402jp.com</a></article>
-      <article class="card"><h3>Data we sell</h3><p>Our own data products, sold to other agents per request: stock catalysts and a Japan food price index.</p><span class="card-links"><a href="https://osd.x402jp.com/" target="_blank" rel="noopener">osd.x402jp.com</a> <a href="https://jin.x402jp.com/" target="_blank" rel="noopener">jin.x402jp.com</a></span></article>
+      <article class="card"><h3>x402 Endpoint</h3><span class="card-role">The catalog</span><p>Every API that AI agents can pay for, collected daily. 137,468 endpoints from 11,675 sellers (Oct 9, 2026).</p><a href="https://endpoint.x402jp.com/" target="_blank" rel="noopener">endpoint.x402jp.com</a></article>
+      <article class="card"><h3>x402 Autonomous Agent</h3><span class="card-role">The buyer</span><p>Our own agent buys data from these APIs every morning, paying in USDC on Solana and Base.</p><a href="https://aa.x402jp.com/" target="_blank" rel="noopener">aa.x402jp.com</a></article>
+      <article class="card"><h3>Onchain Stock Data<br>Japan Inflation Nowcall</h3><span class="card-role">The sellers</span><p>Our own data products, sold to other agents per request. Onchain Stock Data: stock catalysts. Japan Inflation Nowcall: a Japan food price index.</p><span class="card-links"><a href="https://osd.x402jp.com/" target="_blank" rel="noopener">osd.x402jp.com</a> <a href="https://jin.x402jp.com/" target="_blank" rel="noopener">jin.x402jp.com</a></span></article>
     </div>
     <div class="gap">
       <h3>The gap</h3>
-      <p>These three don't really connect yet.<br>Our agent finds a seller in the catalog and pays whatever price is listed.<br>It can't ask anyone else for a better price.<br>And it can't tell which seller actually delivers.</p>
+      <p>These three don't really connect yet.<br>x402 Autonomous Agent finds a seller in x402 Endpoint and pays whatever price is listed.<br>It can't ask anyone else for a better price.<br>And it can't tell which seller actually delivers.</p>
     </div>
   </section>
 
   <section class="sec" id="market">
     <h2 class="sec-title">A market in the middle</h2>
-    <p class="lead">So we built a market between them. Buyers say what they need. Sellers compete for it. Every result is kept on Solana.</p>
-    <svg class="flow flow-h" viewBox="0 0 900 420" role="img" aria-label="Sellers from the catalog and our own data connect to x402 RFQ Market; our agent is the buyer on the other side."><defs><linearGradient id="flowGradH" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b6df8c"/><stop offset=".35" stop-color="#ecd27c"/><stop offset=".65" stop-color="#ebc9da"/><stop offset="1" stop-color="#c6b4ee"/></linearGradient><marker id="flowArrowH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#fff"/></marker></defs>
+    <p class="lead">So we built x402 RFQ Market between them. Buyers say what they need. Sellers compete for it. Every result is kept on Solana.</p>
+    <svg class="flow flow-h" viewBox="0 0 900 420" role="img" aria-label="Sellers in x402 Endpoint and Onchain Stock Data / Japan Inflation Nowcall connect to x402 RFQ Market; x402 Autonomous Agent is the buyer."><defs><linearGradient id="flowGradH" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b6df8c"/><stop offset=".35" stop-color="#ecd27c"/><stop offset=".65" stop-color="#ebc9da"/><stop offset="1" stop-color="#c6b4ee"/></linearGradient><marker id="flowArrowH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#fff"/></marker></defs>
       <g fill="none" stroke="#fff" stroke-width="1.5">
         <rect x="40" y="10" width="300" height="84" rx="10"/>
         <rect x="560" y="10" width="300" height="84" rx="10"/>
-        <rect x="300" y="320" width="300" height="84" rx="10"/>
+        <rect x="260" y="320" width="380" height="84" rx="10"/>
         <path d="M190 94 C190 150 300 160 352 182" marker-end="url(#flowArrowH)"/>
         <path d="M710 94 C710 150 600 160 548 182" marker-end="url(#flowArrowH)"/>
         <path d="M450 320 L450 268" marker-end="url(#flowArrowH)"/>
       </g>
       <rect x="250" y="186" width="400" height="78" rx="12" fill="rgba(255,255,255,.03)" stroke="url(#flowGradH)" stroke-width="2.5"/>
       <g fill="#fff" font-family="Poppins, sans-serif" text-anchor="middle">
-        <text x="190" y="60" font-size="20" font-weight="600">Sellers from the catalog</text>
-        <text x="710" y="60" font-size="20" font-weight="600">Our own data</text>
+        <text x="190" y="60" font-size="20" font-weight="600">Sellers in x402 Endpoint</text>
+        <text x="710" y="47" font-size="19" font-weight="600">Onchain Stock Data</text><text x="710" y="73" font-size="19" font-weight="600">Japan Inflation Nowcall</text>
         <text x="450" y="234" font-size="26" font-weight="800">x402 RFQ Market</text>
-        <text x="450" y="370" font-size="20" font-weight="600">Our agent (buyer)</text>
+        <text x="450" y="370" font-size="20" font-weight="600">x402 Autonomous Agent (buyer)</text>
       </g>
     </svg>
-    <svg class="flow flow-v" viewBox="0 0 340 470" role="img" aria-label="Sellers from the catalog and our own data connect to x402 RFQ Market; our agent is the buyer on the other side."><defs><linearGradient id="flowGradV" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b6df8c"/><stop offset=".35" stop-color="#ecd27c"/><stop offset=".65" stop-color="#ebc9da"/><stop offset="1" stop-color="#c6b4ee"/></linearGradient><marker id="flowArrowV" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#fff"/></marker></defs>
+    <svg class="flow flow-v" viewBox="0 0 340 470" role="img" aria-label="Sellers in x402 Endpoint and Onchain Stock Data / Japan Inflation Nowcall connect to x402 RFQ Market; x402 Autonomous Agent is the buyer."><defs><linearGradient id="flowGradV" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b6df8c"/><stop offset=".35" stop-color="#ecd27c"/><stop offset=".65" stop-color="#ebc9da"/><stop offset="1" stop-color="#c6b4ee"/></linearGradient><marker id="flowArrowV" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#fff"/></marker></defs>
       <g fill="none" stroke="#fff" stroke-width="1.5">
         <rect x="10" y="10" width="155" height="96" rx="10"/>
         <rect x="175" y="10" width="155" height="96" rx="10"/>
-        <rect x="45" y="374" width="250" height="80" rx="10"/>
+        <rect x="20" y="374" width="300" height="80" rx="10"/>
         <path d="M88 106 L120 186" marker-end="url(#flowArrowV)"/>
         <path d="M252 106 L220 186" marker-end="url(#flowArrowV)"/>
         <path d="M170 374 L170 290" marker-end="url(#flowArrowV)"/>
       </g>
       <rect x="20" y="190" width="300" height="96" rx="12" fill="rgba(255,255,255,.03)" stroke="url(#flowGradV)" stroke-width="2.5"/>
       <g fill="#fff" font-family="Poppins, sans-serif" text-anchor="middle">
-        <text x="88" y="52" font-size="17" font-weight="600">Sellers from</text>
-        <text x="88" y="76" font-size="17" font-weight="600">the catalog</text>
-        <text x="252" y="64" font-size="17" font-weight="600">Our own data</text>
+        <text x="88" y="40" font-size="15" font-weight="600">Sellers in</text>
+        <text x="88" y="62" font-size="15" font-weight="600">x402</text>
+        <text x="88" y="84" font-size="15" font-weight="600">Endpoint</text>
+        <text x="252" y="40" font-size="15" font-weight="600">Onchain</text><text x="252" y="58" font-size="15" font-weight="600">Stock Data /</text><text x="252" y="76" font-size="15" font-weight="600">Japan Inflation</text><text x="252" y="94" font-size="15" font-weight="600">Nowcall</text>
         <text x="170" y="246" font-size="25" font-weight="800">x402 RFQ Market</text>
-        <text x="170" y="420" font-size="18" font-weight="600">Our agent (buyer)</text>
+        <text x="170" y="408" font-size="18" font-weight="600">x402 Autonomous Agent</text><text x="170" y="432" font-size="16" fill="#bdbdbd">(buyer)</text>
       </g>
     </svg>
     <ol class="steps steps-4">
@@ -284,7 +286,7 @@ Fee          1% of the winning price, paid by the buyer</pre>
 
   <section class="sec" id="next">
     <h2 class="sec-title">Next</h2>
-    <p class="lead">Open the market to the 137,468 endpoints already in our catalog, so any seller can quote.</p>
+    <p class="lead">Open x402 RFQ Market to the 137,468 endpoints already in x402 Endpoint, so any seller can quote.</p>
   </section>
 </main>
 
