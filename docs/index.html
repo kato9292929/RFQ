@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>x402 RFQ Market</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23111'/%3E%3Ctext x='32' y='46' text-anchor='middle' font-family='Arial Black,sans-serif' font-weight='900' font-size='30' fill='%23111' stroke='%23e8d9c8' stroke-width='5' paint-order='stroke'%3ERFQ%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#000; --fg:#fff; --pad-x: clamp(20px, 6.95vw, 120px) }
+  * { margin:0; padding:0; box-sizing:border-box }
+  html, body { background:#000; color:#fff; font-family:'Poppins',sans-serif; -webkit-font-smoothing:antialiased; overflow-x:clip }
+
+  .hero { position:relative; width:100%; height:100vh; height:100svh; min-height:520px; overflow:hidden; background:#000 }
+  #scene { position:absolute; inset:0; width:100%; height:100%; display:block; cursor:grab; touch-action:none }
+  #scene.dragging { cursor:grabbing }
+  .ui { position:absolute; inset:0; pointer-events:none; z-index:2 }
+  .ui a, .ui button { pointer-events:auto }
+  .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap }
+
+  /* NAV */
+  .nav { position:absolute; top:clamp(24px,4.7vh,40px); left:var(--pad-x); right:var(--pad-x); display:flex; align-items:center; justify-content:space-between }
+  .logo { display:flex; align-items:center; gap:8px; color:#fff; text-decoration:none; font-size:15px; letter-spacing:-0.01em }
+  .logo-mark { display:block; width:20px; height:40px; background:#fff; border-radius:0 20px 20px 0 }
+  .logo-svg { display:block; height:40px; width:auto; overflow:visible }
+  .logo b { font-weight:700 }
+  .logo span { font-weight:400 }
+  .nav-links { display:flex; gap:clamp(20px,4.1vw,60px); list-style:none }
+  .nav-links a { color:#fff; text-decoration:none; font-size:15px; font-weight:500; position:relative; cursor:pointer }
+  .nav-links a::after { content:''; position:absolute; left:0; right:0; bottom:-4px; height:1px; background:currentColor; transform:scaleX(0); transform-origin:right; transition:transform .35s ease }
+  .nav-links a:hover::after { transform:scaleX(1); transform-origin:left }
+
+  /* ARROWS */
+  .arrows { position:absolute; top:18.9%; left:76.7%; display:flex; gap:32px; transform:translate(-19px,-50%) }
+  .arrow { width:38px; height:38px; border-radius:50%; border:2.5px solid #fff; background:transparent; color:#fff; display:grid; place-items:center; cursor:pointer; transition:background .25s, color .25s }
+  .arrow svg { width:18px; height:18px }
+  .arrow:hover { background:#fff; color:#000 }
+
+  /* PAGINATION DOTS */
+  .dots { position:absolute; right:calc(var(--pad-x) - 7px); top:49.4%; transform:translateY(-50%); display:flex; flex-direction:column; gap:33px }
+  .dot { width:14px; height:14px; border-radius:50%; border:2px solid #fff; background:#fff; cursor:pointer; transition:background .25s }
+  .dot.active { background:transparent }
+
+  /* TAGLINE */
+  .tagline { position:absolute; left:var(--pad-x); bottom:clamp(40px,7.5vh,70px); font-size:clamp(24px,2.65vw,44px); line-height:1.2; font-weight:300; letter-spacing:-0.01em }
+  .tagline strong { font-weight:700; display:block }
+
+  /* CTA ROW */
+  .cta-row { position:absolute; left:45.6%; right:-1vw; top:88.7%; transform:translateY(-50%); display:flex; align-items:center }
+  .cta { flex:none; padding:0 15px; height:48px; display:inline-flex; align-items:center; border:1.5px solid rgba(255,255,255,.85); border-radius:6px; background:rgba(0,0,0,.15); color:#fff; font-size:14px; font-weight:400; text-decoration:none; cursor:pointer; transition:background .25s, color .25s }
+  .cta:hover { background:#fff; color:#000 }
+  .cta-line { flex:1; height:1.5px; background:rgba(255,255,255,.8); min-width:40px }
+  .count { flex:none; font-size:clamp(140px,19.8vw,360px); font-weight:400; line-height:1; letter-spacing:-0.02em; color:transparent; -webkit-text-stroke:1.5px rgba(255,255,255,.9); transform:translateY(6%); user-select:none }
+
+  /* LOADER */
+  .loader { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); font-size:12px; letter-spacing:.2em; text-transform:uppercase; opacity:.6; transition:opacity .6s }
+  .loader.done { opacity:0 }
+
+  /* RESPONSIVE */
+  @media (max-width:900px), (max-aspect-ratio:1/1) {
+    .arrows { left:auto; right:var(--pad-x); top:15%; transform:translateY(-50%); gap:14px }
+    .tagline { bottom:clamp(150px,20vh,220px) }
+    .cta-row { left:var(--pad-x); right:-3vw; top:auto; bottom:24px; transform:none }
+    .count { font-size:clamp(120px,22vw,200px) }
+  }
+  @media (max-width:640px) {
+    .nav-links { gap:16px }
+    .nav-links a, .logo { font-size:13px }
+    .dots { gap:20px; right:16px }
+    .dot { width:10px; height:10px }
+    .cta-row { right:-8vw }
+    .count { font-size:120px }
+  }
+
+  html { scroll-behavior:smooth }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto } }
+  @media (pointer:coarse) { #scene { touch-action:pan-y } }   /* touch: horizontal drag rotates, vertical swipe scrolls the page */
+
+  /* slide label above the outlined number (the number itself bleeds off the bottom edge) */
+  .count-wrap { flex:none; position:relative; display:block }
+  .count { display:block }
+  .count-label { position:absolute; left:0.12em; bottom:100%; font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:#bdbdbd; white-space:nowrap }
+  .tagline, .count, .count-label { transition:opacity .3s ease }
+  .fading { opacity:0 }
+
+  /* CONTENT SECTIONS */
+  .content { position:relative; z-index:3; background:#000 }
+  .sec { padding:clamp(72px,12vh,140px) var(--pad-x) 0; max-width:1440px; margin:0 auto; scroll-margin-top:24px }
+  .sec-title { font-size:clamp(32px,4.2vw,64px); font-weight:800; line-height:1.05; letter-spacing:-0.02em; margin-bottom:24px }
+  .lead { max-width:820px; font-size:clamp(16px,1.35vw,20px); font-weight:300; line-height:1.6; color:#d6d6d6 }
+  .note { margin-top:28px; max-width:820px; font-size:13px; line-height:1.6; color:#8c8c8c }
+  .content a, .footer a { color:#fff; text-decoration:none; border-bottom:1px solid rgba(255,255,255,.35); transition:border-color .25s }
+  .content a:hover, .footer a:hover { border-color:#fff }
+
+  .steps { list-style:none; display:grid; grid-template-columns:repeat(5,1fr); gap:clamp(16px,2vw,32px); margin-top:clamp(40px,6vh,64px) }
+  .steps li { border-top:1.5px solid rgba(255,255,255,.8); padding-top:20px; min-width:0 }
+  .step-no { display:block; font-size:clamp(56px,6vw,96px); line-height:1; font-weight:400; letter-spacing:-0.02em; color:transparent; -webkit-text-stroke:1.5px rgba(255,255,255,.9); margin-bottom:16px }
+  .steps h3, .card h3 { font-size:20px; font-weight:700; margin-bottom:10px; letter-spacing:-0.01em }
+  .steps p, .card p { font-size:15px; line-height:1.6; color:#c4c4c4; font-weight:300 }
+
+  .flow { display:block; width:100%; max-width:900px; height:auto; margin:clamp(40px,6vh,64px) auto 0; overflow:visible }
+  .flow-v { display:none; max-width:360px }
+  .cards.cards-3 { grid-template-columns:repeat(3,1fr) }
+  .steps-4 { grid-template-columns:repeat(4,1fr) }
+  .gap { margin-top:clamp(40px,6vh,64px); border-top:1.5px solid rgba(255,255,255,.8); padding-top:20px; max-width:820px }
+  .gap h3 { font-size:20px; font-weight:700; margin-bottom:10px }
+  .gap p, .prose p { font-size:clamp(16px,1.35vw,20px); font-weight:300; line-height:1.6; color:#d6d6d6 }
+  .prose { max-width:820px; display:grid; gap:14px }
+  .example { max-width:520px; margin-top:clamp(32px,5vh,48px); border-color:transparent; background:linear-gradient(#050505,#050505) padding-box, linear-gradient(120deg,#b6df8c,#ecd27c,#ebc9da,#c6b4ee) border-box }
+  .example p { color:#e6e6e6 }
+  .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:clamp(16px,2vw,28px); margin-top:clamp(40px,6vh,64px) }
+  .card { border:1.5px solid rgba(255,255,255,.22); border-radius:10px; padding:24px; min-width:0; display:flex; flex-direction:column; gap:4px; background:rgba(255,255,255,.02) }
+  .card p { flex:1; margin-bottom:16px }
+  .card a { align-self:flex-start; font-size:14px; overflow-wrap:anywhere }
+  .card-links { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 6px; font-size:14px }
+  .card-label { font-size:12px; font-weight:600; letter-spacing:.2em; color:#9a9a9a; margin-bottom:8px }
+
+
+  .tiles { display:grid; grid-template-columns:repeat(5,1fr); gap:clamp(12px,2vw,28px); margin-top:clamp(32px,5vh,56px) }
+  .tile { display:flex; flex-direction:column; gap:8px; min-width:0 }
+  .tile-no { font-size:clamp(72px,9vw,150px); line-height:1; font-weight:400; letter-spacing:-0.02em; color:transparent; -webkit-text-stroke:1.5px rgba(255,255,255,.9) }
+  .tile-label { font-size:13px; letter-spacing:.14em; text-transform:uppercase; color:#bdbdbd }
+  .asof { margin-top:20px; font-size:13px; color:#8c8c8c }
+  .facts { margin-top:36px; padding:20px 22px; border:1px solid rgba(255,255,255,.18); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:14px; line-height:1.8; color:#d6d6d6; overflow-x:auto; max-width:100% }
+  .links { list-style:none; display:flex; flex-wrap:wrap; gap:12px 28px; margin-top:24px; font-size:15px }
+
+  .footer { padding:clamp(80px,12vh,140px) var(--pad-x) 48px; max-width:1440px; margin:0 auto; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:16px; font-size:14px; color:#bdbdbd }
+  .footer .links { margin-top:0 }
+
+  @media (max-width:900px), (max-aspect-ratio:1/1) {
+    .count-label { left:auto; right:calc(100% + 10px); bottom:auto; top:0.4em }
+  }
+  @media (max-width:1100px) {
+    .steps.steps-4 { grid-template-columns:repeat(2,1fr) }
+  }
+  @media (max-width:640px) {
+    .nav-links .desk-only { display:none }
+    .steps, .steps.steps-4, .cards, .cards.cards-3 { grid-template-columns:1fr }
+    .steps li { display:grid; grid-template-columns:auto 1fr; column-gap:16px; align-items:start }
+    .steps .step-no { grid-row:span 2; font-size:56px; margin-bottom:0 }
+    .tiles { grid-template-columns:repeat(2,1fr); row-gap:28px }
+    .tile-no { font-size:72px }
+    .facts { font-size:12px }
+    .count-label { font-size:10px }
+    .flow-h { display:none }
+    .flow-v { display:block }
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<section class="hero" id="hero">
+  <canvas id="scene" aria-label="Rotatable glass cube. Drag to rotate."></canvas>
+  <div class="ui">
+    <h1 class="sr-only" id="hero-title">Request For Quote</h1>
+    <header class="nav">
+      <a href="#" class="logo"><svg class="logo-svg" viewBox="0 0 640 620" role="img" aria-label="RFQ"><defs><linearGradient id="rfqGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b6df8c"/><stop offset="0.3" stop-color="#ecd27c"/><stop offset="0.55" stop-color="#efe3d4"/><stop offset="0.78" stop-color="#ebc9da"/><stop offset="1" stop-color="#c6b4ee"/></linearGradient></defs><g font-family="Poppins, sans-serif" font-weight="800" fill="#000" stroke="url(#rfqGrad)" stroke-width="58" stroke-linejoin="round" paint-order="stroke"><text x="60" y="300" font-size="310">R</text><text x="200" y="420" font-size="310">F</text><text x="285" y="525" font-size="330">Q</text></g></svg></a>
+      <ul class="nav-links"><li><a href="#why">Why</a></li><li class="desk-only"><a href="#market">Market</a></li><li class="desk-only"><a href="#records">Records</a></li><li><a href="https://github.com/kato9292929/RFQ" target="_blank" rel="noopener">GitHub</a></li></ul>
+    </header>
+    <div class="arrows">
+      <button class="arrow" id="prev" aria-label="Previous">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+      </button>
+      <button class="arrow" id="next" aria-label="Next">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </div>
+    <nav class="dots"><button class="dot" aria-label="Slide 1"></button><button class="dot active" aria-label="Slide 2"></button><button class="dot" aria-label="Slide 3"></button></nav>
+    <p class="tagline" id="tagline" aria-live="polite">One agent asks.<br>Many sellers answer.<strong>The best one wins.</strong></p>
+    <div class="cta-row">
+      <a href="https://explorer.solana.com/address/7XpxowqbuaEbQ3VkuQemFi7B3aMuat7eKtp5kydGvsVp?cluster=devnet" class="cta" target="_blank" rel="noopener">See it on devnet</a>
+      <span class="cta-line"></span>
+      <span class="count-wrap"><span class="count-label" id="count-label">requests on devnet</span><span class="count" id="count" aria-hidden="true">13</span></span>
+    </div>
+    <div class="loader" id="loader">Loading model</div>
+  </div>
+</section>
+
+<main class="content">
+  <section class="sec" id="why">
+    <h2 class="sec-title">What we already run</h2>
+    <p class="lead">x402 Inc. already runs three things for AI agents that pay for data.</p>
+    <div class="cards cards-3">
+      <article class="card"><h3>A catalog of paid APIs</h3><p>Every API that AI agents can pay for, collected daily. 137,468 endpoints from 11,675 sellers (Oct 9, 2026).</p><a href="https://endpoint.x402jp.com/" target="_blank" rel="noopener">endpoint.x402jp.com</a></article>
+      <article class="card"><h3>An agent that buys</h3><p>Our own agent buys data from these APIs every morning, paying in USDC on Solana and Base.</p><a href="https://aa.x402jp.com/" target="_blank" rel="noopener">aa.x402jp.com</a></article>
+      <article class="card"><h3>Data we sell</h3><p>Our own data products, sold to other agents per request: stock catalysts and a Japan food price index.</p><span class="card-links"><a href="https://osd.x402jp.com/" target="_blank" rel="noopener">osd.x402jp.com</a> <a href="https://jin.x402jp.com/" target="_blank" rel="noopener">jin.x402jp.com</a></span></article>
+    </div>
+    <div class="gap">
+      <h3>The gap</h3>
+      <p>These three don't really connect yet.<br>Our agent finds a seller in the catalog and pays whatever price is listed.<br>It can't ask anyone else for a better price.<br>And it can't tell which seller actually delivers.</p>
+    </div>
+  </section>
+
+  <section class="sec" id="market">
+    <h2 class="sec-title">A market in the middle</h2>
+    <p class="lead">So we built a market between them. Buyers say what they need. Sellers compete for it. Every result is kept on Solana.</p>
+    <svg class="flow flow-h" viewBox="0 0 900 420" role="img" aria-label="Sellers from the catalog and our own data connect to x402 RFQ Market; our agent is the buyer on the other side."><defs><linearGradient id="flowGradH" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b6df8c"/><stop offset=".35" stop-color="#ecd27c"/><stop offset=".65" stop-color="#ebc9da"/><stop offset="1" stop-color="#c6b4ee"/></linearGradient><marker id="flowArrowH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#fff"/></marker></defs>
+      <g fill="none" stroke="#fff" stroke-width="1.5">
+        <rect x="40" y="10" width="300" height="84" rx="10"/>
+        <rect x="560" y="10" width="300" height="84" rx="10"/>
+        <rect x="300" y="320" width="300" height="84" rx="10"/>
+        <path d="M190 94 C190 150 300 160 352 182" marker-end="url(#flowArrowH)"/>
+        <path d="M710 94 C710 150 600 160 548 182" marker-end="url(#flowArrowH)"/>
+        <path d="M450 320 L450 268" marker-end="url(#flowArrowH)"/>
+      </g>
+      <rect x="250" y="186" width="400" height="78" rx="12" fill="rgba(255,255,255,.03)" stroke="url(#flowGradH)" stroke-width="2.5"/>
+      <g fill="#fff" font-family="Poppins, sans-serif" text-anchor="middle">
+        <text x="190" y="60" font-size="20" font-weight="600">Sellers from the catalog</text>
+        <text x="710" y="60" font-size="20" font-weight="600">Our own data</text>
+        <text x="450" y="234" font-size="26" font-weight="800">x402 RFQ Market</text>
+        <text x="450" y="370" font-size="20" font-weight="600">Our agent (buyer)</text>
+      </g>
+    </svg>
+    <svg class="flow flow-v" viewBox="0 0 340 470" role="img" aria-label="Sellers from the catalog and our own data connect to x402 RFQ Market; our agent is the buyer on the other side."><defs><linearGradient id="flowGradV" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b6df8c"/><stop offset=".35" stop-color="#ecd27c"/><stop offset=".65" stop-color="#ebc9da"/><stop offset="1" stop-color="#c6b4ee"/></linearGradient><marker id="flowArrowV" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#fff"/></marker></defs>
+      <g fill="none" stroke="#fff" stroke-width="1.5">
+        <rect x="10" y="10" width="155" height="96" rx="10"/>
+        <rect x="175" y="10" width="155" height="96" rx="10"/>
+        <rect x="45" y="374" width="250" height="80" rx="10"/>
+        <path d="M88 106 L120 186" marker-end="url(#flowArrowV)"/>
+        <path d="M252 106 L220 186" marker-end="url(#flowArrowV)"/>
+        <path d="M170 374 L170 290" marker-end="url(#flowArrowV)"/>
+      </g>
+      <rect x="20" y="190" width="300" height="96" rx="12" fill="rgba(255,255,255,.03)" stroke="url(#flowGradV)" stroke-width="2.5"/>
+      <g fill="#fff" font-family="Poppins, sans-serif" text-anchor="middle">
+        <text x="88" y="52" font-size="17" font-weight="600">Sellers from</text>
+        <text x="88" y="76" font-size="17" font-weight="600">the catalog</text>
+        <text x="252" y="64" font-size="17" font-weight="600">Our own data</text>
+        <text x="170" y="246" font-size="25" font-weight="800">x402 RFQ Market</text>
+        <text x="170" y="420" font-size="18" font-weight="600">Our agent (buyer)</text>
+      </g>
+    </svg>
+    <ol class="steps steps-4">
+      <li><span class="step-no">01</span><h3>Ask</h3><p>The buyer posts what data it wants, the most it will pay, and how fast it needs it.</p></li>
+      <li><span class="step-no">02</span><h3>Quote</h3><p>Sellers send back a price. If they can't do it, they say why.</p></li>
+      <li><span class="step-no">03</span><h3>Pay</h3><p>The cheapest seller that's fast enough wins, and is paid in USDC on Solana.</p></li>
+      <li><span class="step-no">04</span><h3>Record</h3><p>The buyer saves the result on Solana: delivered, or what went wrong.</p></li>
+    </ol>
+    <p class="note">The market takes 1% of every winning price.</p>
+  </section>
+
+  <section class="sec" id="no-refunds">
+    <h2 class="sec-title">No refunds. A record instead.</h2>
+    <div class="prose">
+      <p>Payment happens before the data arrives, and the market never holds the money. So it can't give refunds.</p>
+      <p>What it keeps is the record. If a seller is paid and doesn't deliver, that goes on the seller's record, where anyone can see it.</p>
+      <p>Over time, that record is how agents choose who to buy from.</p>
+    </div>
+    <article class="card example">
+      <span class="card-label">Real example, devnet</span>
+      <p>The buyer paid 0.03 USDC. The data never came. It's now on that seller's record.</p>
+      <a href="https://explorer.solana.com/tx/3m5HanqgwGDgaXzHrv3LGbHS1xmBuZgAYXw9mgqsMDLbA3EjFvq9KxCPHhA5R4WAkPFbzhSGiy4ZAcAxuVpkLiFQ?cluster=devnet" target="_blank" rel="noopener">See the payment</a>
+    </article>
+  </section>
+
+  <section class="sec" id="records">
+    <h2 class="sec-title">Devnet so far</h2>
+    <div class="tiles">
+      <div class="tile"><span class="tile-no">13</span><span class="tile-label">requests</span></div>
+      <div class="tile"><span class="tile-no">7</span><span class="tile-label">completed</span></div>
+      <div class="tile"><span class="tile-no">2</span><span class="tile-label">rejected</span></div>
+      <div class="tile"><span class="tile-no">4</span><span class="tile-label">cancelled</span></div>
+      <div class="tile"><span class="tile-no">9</span><span class="tile-label">payments checked on-chain</span></div>
+    </div>
+    <p class="asof">As of Oct 10, 2026 (JST)</p>
+    <p class="note">Every buyer and seller here is one of our own agents. These runs show the market working, including cancellations and failures. They are not outside demand yet.</p>
+    <pre class="facts">Program ID   7XpxowqbuaEbQ3VkuQemFi7B3aMuat7eKtp5kydGvsVp
+Cluster      Solana devnet
+Payments     USDC (Circle devnet), x402 v2, x402.org facilitator
+Fee          1% of the winning price, paid by the buyer</pre>
+    <ul class="links">
+      <li><a href="https://explorer.solana.com/tx/5AqbP6PsPW827MK9ZioWPkaj1ptBsQ4mzXidNMZimbpzWuW2jM1v6eUx1PRcW5472BNSrqMjz6ebZrLLP6YmmrXR?cluster=devnet" target="_blank" rel="noopener">A completed payment</a></li>
+      <li><a href="https://github.com/kato9292929/RFQ/tree/main/log" target="_blank" rel="noopener">Full run log</a></li>
+    </ul>
+  </section>
+
+  <section class="sec" id="next">
+    <h2 class="sec-title">Next</h2>
+    <p class="lead">Open the market to the 137,468 endpoints already in our catalog, so any seller can quote.</p>
+  </section>
+</main>
+
+<footer class="footer">
+  <p>x402 RFQ Market — built by x402 Inc., Tokyo.</p>
+  <ul class="links">
+    <li><a href="https://x402jp.com/" target="_blank" rel="noopener">x402jp.com</a></li>
+    <li><a href="https://github.com/kato9292929/RFQ" target="_blank" rel="noopener">GitHub</a></li>
+    <li><a href="https://x.com/kato_masa8" target="_blank" rel="noopener">X</a></li>
+  </ul>
+</footer>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+
+const MODEL_URL = 'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260929_212926_92423081-b0e4-4f5a-b650-14af6c05c058.glb';
+
+const canvas = document.getElementById('scene');
+const loaderEl = document.getElementById('loader');
+
+// ---------------------------------------------------------------- renderer / camera
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+renderer.setClearColor(0x000000, 1);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+let DPR = Math.min(window.devicePixelRatio || 1, 2);
+renderer.setPixelRatio(DPR);
+
+const FOV = 30;
+const camera = new THREE.PerspectiveCamera(FOV, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 0, 10);
+camera.lookAt(0, 0, 0);
+
+// ---------------------------------------------------------------- background headline
+const textCanvas = document.createElement('canvas');
+const tctx = textCanvas.getContext('2d');
+const textTex = new THREE.CanvasTexture(textCanvas);
+textTex.colorSpace = THREE.SRGBColorSpace;
+textTex.minFilter = THREE.LinearFilter;
+textTex.magFilter = THREE.LinearFilter;
+textTex.generateMipmaps = false;
+
+const bgScene = new THREE.Scene();
+const bgMat = new THREE.ShaderMaterial({
+  uniforms: { uTex: { value: textTex } },
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = vec4(position.xy, 0.0, 1.0);
+    }`,
+  fragmentShader: /* glsl */`
+    uniform sampler2D uTex;
+    varying vec2 vUv;
+    void main() {
+      gl_FragColor = texture2D(uTex, vUv);
+      #include <colorspace_fragment>
+    }`,
+  depthTest: false,
+  depthWrite: false,
+});
+const bgQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bgMat);
+bgQuad.frustumCulled = false;
+bgScene.add(bgQuad);
+
+const isMobile = (W, H) => W < 768 || W / H < 1;
+
+// Hero slides (devnet /stats as of 2026-10-10 JST: 13 requests, 9 payments checked = 7 completed + 2 rejected, 7 completed)
+const SLIDES = [
+  { lines: ['Request', 'For', 'Quote'], tag: 'One agent asks.<br>Many sellers answer.<strong>The best one wins.</strong>', count: '13', label: 'requests on devnet' },
+  { lines: ['Pay', 'Per', 'Call'], tag: 'The winner is paid<br>in USDC, per request,<strong>on Solana.</strong>', count: '9', label: 'payments checked' },
+  { lines: ['Every', 'Outcome', 'Kept'], tag: 'Delivered or not,<br>it stays on<strong>the seller\'s record.</strong>', count: '7', label: 'completed' },
+];
+let slideIndex = 0;
+
+function drawHeadline(W, H) {
+  textCanvas.width = Math.round(W * DPR);
+  textCanvas.height = Math.round(H * DPR);
+  tctx.setTransform(1, 0, 0, 1, 0, 0);
+  tctx.fillStyle = '#000';
+  tctx.fillRect(0, 0, textCanvas.width, textCanvas.height);
+  tctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+  const mobile = isMobile(W, H);
+  const lines = SLIDES[slideIndex].lines;
+  let fs = Math.min(H * 0.21, W * (mobile ? 0.21 : 0.118));
+  tctx.font = `800 ${fs}px Poppins`;
+  const maxW = W * (mobile ? 0.9 : 0.5);
+  const widest = Math.max(...lines.map((l) => tctx.measureText(l).width));
+  if (widest > maxW) {
+    fs *= maxW / widest;
+    tctx.font = `800 ${fs}px Poppins`;
+  }
+  tctx.fillStyle = '#e9e9e9';
+  tctx.textAlign = 'center';
+  tctx.textBaseline = 'alphabetic';
+  const cx = W * (mobile ? 0.5 : 0.505);
+  const cy = H * (mobile ? 0.45 : 0.468);
+  const gap = fs * 1.07;
+  const cap = fs * 0.7;
+  lines.forEach((l, i) => tctx.fillText(l, cx, cy + cap / 2 + (i - 1) * gap));
+  textTex.needsUpdate = true;
+}
+
+// ---------------------------------------------------------------- render targets
+const rtOpts = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true };
+const rtBack = new THREE.WebGLRenderTarget(1, 1, rtOpts);
+const rtFront = new THREE.WebGLRenderTarget(1, 1, rtOpts);
+
+// ---------------------------------------------------------------- glass material
+const glassVert = /* glsl */`
+  varying vec3 vNormal;
+  varying vec3 vEye;
+  void main() {
+    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+    vec4 mvPos = viewMatrix * worldPos;
+    gl_Position = projectionMatrix * mvPos;
+    vNormal = normalize(normalMatrix * normal);
+    vEye = normalize(mvPos.xyz);
+  }`;
+
+const glassFrag = /* glsl */`
+  uniform sampler2D uTexture;
+  uniform vec2 uResolution;
+  uniform float uIorR, uIorY, uIorG, uIorC, uIorB, uIorP;
+  uniform float uRefractPower, uChromatic, uSaturation;
+  uniform float uShininess, uDiffuseness, uFresnelPower;
+  uniform vec3 uLight;
+  uniform float uBackside;
+  varying vec3 vNormal;
+  varying vec3 vEye;
+
+  #define LOOP 16
+
+  vec3 sat(vec3 rgb, float adjustment) {
+    const vec3 W = vec3(0.2125, 0.7154, 0.0721);
+    vec3 intensity = vec3(dot(rgb, W));
+    return mix(intensity, rgb, adjustment);
+  }
+
+  float specular(vec3 light, float shininess, float diffuseness, vec3 n, vec3 eye) {
+    vec3 lightVector = normalize(-light);
+    vec3 viewVector = -eye;
+    vec3 halfVector = normalize(viewVector + lightVector);
+    float kSpecular = pow(max(dot(n, halfVector), 0.0), shininess);
+    float kDiffuse = max(0.0, dot(n, lightVector));
+    return kSpecular + kDiffuse * diffuseness;
+  }
+
+  void main() {
+    vec2 uv = gl_FragCoord.xy / uResolution;
+    vec3 n = normalize(vNormal);
+    if (uBackside > 0.5) n = -n;
+    vec3 eye = normalize(vEye);
+
+    vec3 color = vec3(0.0);
+    for (int i = 0; i < LOOP; i++) {
+      float slide = float(i) / float(LOOP) * 0.045;
+
+      vec3 refrR = refract(eye, n, 1.0 / uIorR);
+      vec3 refrY = refract(eye, n, 1.0 / uIorY);
+      vec3 refrG = refract(eye, n, 1.0 / uIorG);
+      vec3 refrC = refract(eye, n, 1.0 / uIorC);
+      vec3 refrB = refract(eye, n, 1.0 / uIorB);
+      vec3 refrP = refract(eye, n, 1.0 / uIorP);
+
+      vec3 tR = texture2D(uTexture, uv + refrR.xy * (uRefractPower + slide * 1.0) * uChromatic).rgb;
+      vec3 tY = texture2D(uTexture, uv + refrY.xy * (uRefractPower + slide * 1.0) * uChromatic).rgb;
+      vec3 tG = texture2D(uTexture, uv + refrG.xy * (uRefractPower + slide * 2.0) * uChromatic).rgb;
+      vec3 tC = texture2D(uTexture, uv + refrC.xy * (uRefractPower + slide * 2.5) * uChromatic).rgb;
+      vec3 tB = texture2D(uTexture, uv + refrB.xy * (uRefractPower + slide * 3.0) * uChromatic).rgb;
+      vec3 tP = texture2D(uTexture, uv + refrP.xy * (uRefractPower + slide * 1.0) * uChromatic).rgb;
+
+      float r = tR.x * 0.5;
+      float y = (tY.x * 2.0 + tY.y * 2.0 - tY.z) / 6.0;
+      float g = tG.y * 0.5;
+      float c = (tC.y * 2.0 + tC.z * 2.0 - tC.x) / 6.0;
+      float b = tB.z * 0.5;
+      float p = (tP.z * 2.0 + tP.x * 2.0 - tP.y) / 6.0;
+
+      float R = r + (2.0 * p + 2.0 * y - c) / 3.0;
+      float G = g + (2.0 * y + 2.0 * c - p) / 3.0;
+      float B = b + (2.0 * c + 2.0 * p - y) / 3.0;
+
+      color += vec3(R, G, B);
+    }
+    color /= float(LOOP);
+    color = sat(color, uSaturation);
+
+    float spec = specular(uLight, uShininess, uDiffuseness, n, eye)
+               + 0.6 * specular(vec3(1.0, 1.0, -1.0), uShininess * 0.6, uDiffuseness * 0.5, n, eye);
+    color += spec * (uBackside > 0.5 ? 0.35 : 1.0);
+
+    float f = pow(1.0 + dot(eye, n), uFresnelPower);
+    color = mix(color, vec3(1.0), f * (uBackside > 0.5 ? 0.25 : 0.55));
+
+    color += vec3(0.004, 0.005, 0.007);
+    gl_FragColor = vec4(color, 1.0);
+    #include <colorspace_fragment>
+  }`;
+
+function glassUniforms(backside) {
+  return {
+    uTexture: { value: null },
+    uResolution: { value: new THREE.Vector2(1, 1) },
+    uIorR: { value: 1.15 }, uIorY: { value: 1.16 }, uIorG: { value: 1.18 },
+    uIorC: { value: 1.22 }, uIorB: { value: 1.22 }, uIorP: { value: 1.22 },
+    uRefractPower: { value: backside ? 0.22 : 0.30 },
+    uChromatic: { value: 0.5 },
+    uSaturation: { value: 1.08 },
+    uShininess: { value: 90 },
+    uDiffuseness: { value: 0.02 },
+    uFresnelPower: { value: 5.0 },
+    uLight: { value: new THREE.Vector3(-1, 1, 1) },
+    uBackside: { value: backside ? 1 : 0 },
+  };
+}
+const frontMat = new THREE.ShaderMaterial({ uniforms: glassUniforms(false), vertexShader: glassVert, fragmentShader: glassFrag, side: THREE.FrontSide });
+const backMat = new THREE.ShaderMaterial({ uniforms: glassUniforms(true), vertexShader: glassVert, fragmentShader: glassFrag, side: THREE.BackSide });
+backMat.uniforms.uTexture.value = rtBack.texture;
+frontMat.uniforms.uTexture.value = rtFront.texture;
+
+// ---------------------------------------------------------------- scene graph
+const scene = new THREE.Scene();
+const pivot = new THREE.Group();
+const spinner = new THREE.Group();
+spinner.rotation.set(-0.42, 0.62, 0.18);
+pivot.add(spinner);
+scene.add(pivot);
+let cube = null;
+
+function normalizeGeometry(g) {
+  g.computeBoundingBox();
+  const box = g.boundingBox;
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  g.translate(-center.x, -center.y, -center.z);
+  const s = 1 / Math.max(size.x, size.y, size.z);
+  g.scale(s, s, s);
+  g.computeBoundingSphere();
+  return g;
+}
+
+function setCube(geometry) {
+  cube = new THREE.Mesh(normalizeGeometry(geometry), frontMat);
+  spinner.add(cube);
+  loaderEl.classList.add('done');
+}
+
+new GLTFLoader().load(
+  MODEL_URL,
+  (gltf) => {
+    gltf.scene.updateMatrixWorld(true);
+    const parts = [];
+    gltf.scene.traverse((o) => {
+      if (!o.isMesh) return;
+      let g = o.geometry.clone();
+      g.deleteAttribute('uv');
+      g.deleteAttribute('color');
+      g.deleteAttribute('tangent');
+      for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+      g = mergeVertices(g, 1e-4);
+      g.computeVertexNormals();
+      g.applyMatrix4(o.matrixWorld);
+      parts.push(g);
+    });
+    const merged = parts.length > 1 ? mergeGeometries(parts) : parts[0];
+    setCube(merged || new RoundedBoxGeometry(1, 1, 1, 8, 0.12));
+  },
+  undefined,
+  () => setCube(new RoundedBoxGeometry(1, 1, 1, 8, 0.12)),
+);
+
+// ---------------------------------------------------------------- layout
+let W = window.innerWidth, H = window.innerHeight;
+function layout() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  renderer.setPixelRatio(DPR);
+  renderer.setSize(W, H, false);
+  camera.aspect = W / H;
+  camera.updateProjectionMatrix();
+
+  const bw = Math.round(W * DPR), bh = Math.round(H * DPR);
+  rtBack.setSize(bw, bh);
+  rtFront.setSize(bw, bh);
+  const buf = renderer.getDrawingBufferSize(new THREE.Vector2());
+  frontMat.uniforms.uResolution.value.copy(buf);
+  backMat.uniforms.uResolution.value.copy(buf);
+
+  drawHeadline(W, H);
+
+  const mobile = isMobile(W, H);
+  const visH = 2 * Math.tan(THREE.MathUtils.degToRad(FOV / 2)) * 10;
+  const visW = visH * camera.aspect;
+  const sx = mobile ? 0.5 : 0.517;
+  const sy = mobile ? 0.45 : 0.488;
+  pivot.position.set((sx - 0.5) * visW, (0.5 - sy) * visH, 0);
+  const px = Math.min(H * 0.44, W * (mobile ? 0.45 : 0.29));
+  pivot.scale.setScalar((px / H) * visH);
+}
+window.addEventListener('resize', layout);
+document.fonts && document.fonts.addEventListener('loadingdone', () => drawHeadline(W, H));
+
+// ---------------------------------------------------------------- interaction
+const AX_X = new THREE.Vector3(1, 0, 0);
+const AX_Y = new THREE.Vector3(0, 1, 0);
+const _q = new THREE.Quaternion();
+function rotateWorld(dx, dy) {
+  if (dx) spinner.quaternion.premultiply(_q.setFromAxisAngle(AX_Y, dx));
+  if (dy) spinner.quaternion.premultiply(_q.setFromAxisAngle(AX_X, dy));
+}
+
+let dragging = false;
+let lastX = 0, lastY = 0, lastT = 0;
+const vel = { x: 0, y: 0 };
+let releaseTime = -Infinity;
+let driftBlend = 0;
+let spinRemaining = 0;
+
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true;
+  canvas.setPointerCapture(e.pointerId);
+  canvas.classList.add('dragging');
+  lastX = e.clientX; lastY = e.clientY; lastT = performance.now();
+  vel.x = vel.y = 0;
+  spinRemaining = 0;
+  driftBlend = 0;
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const now = performance.now();
+  const dx = (e.clientX - lastX) * 0.008;
+  const dy = (e.clientY - lastY) * 0.008;
+  rotateWorld(dx, dy);
+  const frames = Math.max((now - lastT) / 16.67, 0.25);
+  vel.x = dx / frames;
+  vel.y = dy / frames;
+  lastX = e.clientX; lastY = e.clientY; lastT = now;
+});
+function endDrag(e) {
+  if (!dragging) return;
+  dragging = false;
+  canvas.classList.remove('dragging');
+  try { canvas.releasePointerCapture(e.pointerId); } catch {}
+  if (performance.now() - lastT > 80) vel.x = vel.y = 0; // held still before release
+  releaseTime = performance.now();
+}
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+
+function spin(angle) {
+  spinRemaining += angle;
+  vel.x = vel.y = 0;
+}
+const dots = [...document.querySelectorAll('.dot')];
+const tagEl = document.getElementById('tagline');
+const countEl = document.getElementById('count');
+const countLabelEl = document.getElementById('count-label');
+const titleEl = document.getElementById('hero-title');
+let swapTimer = 0;
+function showSlide(i) {
+  slideIndex = (i + SLIDES.length) % SLIDES.length;
+  const sl = SLIDES[slideIndex];
+  dots.forEach((x, k) => x.classList.toggle('active', k === slideIndex));
+  titleEl.textContent = sl.lines.join(' ');
+  drawHeadline(W, H);
+  const els = [tagEl, countEl, countLabelEl];
+  els.forEach((el) => el.classList.add('fading'));
+  clearTimeout(swapTimer);
+  swapTimer = setTimeout(() => {
+    tagEl.innerHTML = sl.tag;
+    countEl.textContent = sl.count;
+    countLabelEl.textContent = sl.label;
+    els.forEach((el) => el.classList.remove('fading'));
+  }, 300);
+}
+document.getElementById('prev').addEventListener('click', () => { spin(-Math.PI / 2); showSlide(slideIndex - 1); });
+document.getElementById('next').addEventListener('click', () => { spin(Math.PI / 2); showSlide(slideIndex + 1); });
+dots.forEach((d, k) => d.addEventListener('click', () => showSlide(k)));
+dots.forEach((x, k) => x.classList.toggle('active', k === slideIndex));
+
+// ---------------------------------------------------------------- loop
+const clock = new THREE.Clock();
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const f60 = dt * 60;
+
+  if (!dragging) {
+    // inertia
+    if (vel.x || vel.y) {
+      rotateWorld(vel.x * f60, vel.y * f60);
+      const damp = Math.pow(0.94, f60);
+      vel.x *= damp; vel.y *= damp;
+      if (Math.abs(vel.x) < 1e-5 && Math.abs(vel.y) < 1e-5) vel.x = vel.y = 0;
+    }
+    // arrow spin
+    if (spinRemaining !== 0) {
+      if (Math.abs(spinRemaining) < 0.0005) {
+        rotateWorld(spinRemaining, 0);
+        spinRemaining = 0;
+      } else {
+        const step = spinRemaining * Math.min(1, 0.09 * f60);
+        rotateWorld(step, 0);
+        spinRemaining -= step;
+      }
+    }
+    // idle drift
+    if (performance.now() - releaseTime > 600) driftBlend = Math.min(1, driftBlend + dt);
+    if (driftBlend > 0) rotateWorld(0.0035 * driftBlend * f60, 0.0012 * driftBlend * f60);
+  }
+
+  // 1) background → rtBack
+  renderer.autoClear = true;
+  renderer.setRenderTarget(rtBack);
+  renderer.render(bgScene, camera);
+
+  // 2) background + back faces → rtFront
+  renderer.setRenderTarget(rtFront);
+  renderer.render(bgScene, camera);
+  if (cube) {
+    renderer.autoClear = false;
+    cube.material = backMat;
+    renderer.render(scene, camera);
+    renderer.autoClear = true;
+  }
+
+  // 3) background + front faces → screen
+  renderer.setRenderTarget(null);
+  renderer.render(bgScene, camera);
+  if (cube) {
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    cube.material = frontMat;
+    renderer.render(scene, camera);
+    renderer.autoClear = true;
+  }
+
+  requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------- start
+const fontsReady = document.fonts
+  ? Promise.all([document.fonts.load('800 100px Poppins'), document.fonts.ready])
+  : Promise.resolve();
+Promise.race([fontsReady, new Promise((r) => setTimeout(r, 2500))])
+  .catch(() => {})
+  .then(() => {
+    layout();
+    clock.getDelta();
+    requestAnimationFrame(frame);
+  });
+</script>
+</body>
+</html>
