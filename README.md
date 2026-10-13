@@ -66,6 +66,12 @@ SLA と拒否は別 PDA に置いており、既存の Config / Rfq / Quote / Fu
 **選定ルール**（買い手）: 仕様の `max_latency_ms` を満たす SLA を申告した見積もりのうち最安。同額なら見積もり作成 tx の slot が早い方、
 同一 slot なら一様乱数（候補・slot・乱数インデックスをログに残す）。pubkey 順は使いません（vanity 鍵で同額を取り続けられるため）。
 
+**売り手の品質条件**（買い手、任意）: 仕様 JSON に `min_probe_score`（0〜100）があれば、上の条件を満たした見積もりそれぞれについて
+売り手のエンドポイントのホストで [x402 Seller Probe](https://github.com/kato9292929/seller-probe) の `GET {PROBE_URL}/scores/:host` を引き、
+スコアが `min_probe_score` 未満の見積もりを除外してから採択します（同額の扱いはその後）。Probe に記録のないホスト（404）もスコアを示せないので除外（`probe_unscored`）。
+Probe の API が応答しないとき（タイムアウト 5 秒・5xx）は除外せず `probe_unavailable` をログに残して従来どおり選びます。
+照会結果・除外と理由は `log/*.jsonl` の `probe_filter` と `quotes_collected.excluded` に残ります。`min_probe_score` が 0〜100 の数でなければ RFQ を出す前に止まります。
+
 **受領判定**（買い手）: JSON であること → `fields` が揃っていること → `freshness_hours` → 仕様の `schema`（JSON Schema, Ajv）。
 売り手は見積もり前にカテゴリ・項目名・鮮度だけを判定し、Schema の制約は見ません。見送り理由と拒否理由は同じ語彙です（`scenarios/README.md`）。
 
@@ -79,7 +85,7 @@ GET  /rfqs/:pubkey            RFQ 詳細 + 全 quote（価格昇順）+ fulfillm
 GET  /quotes?seller=:pubkey
 GET  /fulfillments            payment_sig / response_hash / verified / 検証詳細
 GET  /rejections              拒否（理由コード付き）。拒否でも決済は検証する（支払った上での拒否であること）
-GET  /sellers                 売り手ごとの見積もり・採択・成立・拒否（理由別）・SLA 申告/実測/遵守
+GET  /sellers                 売り手ごとの見積もり・採択・成立・拒否（理由別）・SLA 申告/実測/遵守・見積もったエンドポイントのホスト（endpoint_hosts。x402 Seller Probe が参考値として読む）
 GET  /specs/:spec_hash
 POST /specs                   受け取ったバイト列をそのまま保存し SHA-256 を返す
 GET  /stats                   同じ分母（全 RFQ）で 成立／拒否／キャンセル の 3 列、平均約定価格、手数料累計

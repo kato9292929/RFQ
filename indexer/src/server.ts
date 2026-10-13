@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
 import { ROOT, STATUS, connection, env, fmtUsdc, pdas, program, reasonByCode, retry, sha256 } from "../../lib/common.js";
+import { probeHost } from "../../lib/probe.js";
 
 const PORT = Number(env("INDEXER_PORT", "8787"));
 const PUBLIC_URL = env("INDEXER_PUBLIC_URL", `http://127.0.0.1:${PORT}`);
@@ -338,9 +339,13 @@ app.get(
       const seller = q.account.seller.toBase58();
       const row = rows.get(seller) ?? {
         seller, quotes: 0, awarded: 0, fulfilled: 0, rejected: 0, rejected_by_reason: {} as Record<string, number>,
-        sla_declared: 0, sla_measured: 0, sla_met: 0,
+        sla_declared: 0, sla_measured: 0, sla_met: 0, endpoint_hosts: [] as string[],
       };
       row.quotes++;
+      // Hosts this seller quoted endpoints on (same key as x402 Seller Probe), so the
+      // track record can be joined to Probe scores by host.
+      const host = probeHost(q.account.endpointUri);
+      if (host && !row.endpoint_hosts.includes(host)) row.endpoint_hosts.push(host);
       const r = rfqByPk.get(q.account.rfq.toBase58());
       if (r?.awardedQuote?.equals(q.publicKey)) {
         row.awarded++;
