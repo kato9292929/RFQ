@@ -68,8 +68,8 @@ SLA と拒否は別 PDA に置いており、既存の Config / Rfq / Quote / Fu
 
 **売り手の品質条件**（買い手、任意）: 仕様 JSON に `min_probe_score`（0〜100）があれば、上の条件を満たした見積もりそれぞれについて
 売り手のエンドポイントのホストで [x402 Seller Probe](https://github.com/kato9292929/seller-probe) の `GET {PROBE_URL}/scores/:host` を引き、
-スコアが `min_probe_score` 未満の見積もりを除外してから採択します（同額の扱いはその後）。Probe に記録のないホスト（404）もスコアを示せないので除外（`probe_unscored`）。
-Probe の API が応答しないとき（タイムアウト 5 秒・5xx）は除外せず `probe_unavailable` をログに残して従来どおり選びます。
+スコアが `min_probe_score` 未満の見積もりを除外してから採択します（同額の扱いはその後）。Probe に記録のないホスト（404）は「未満」ではないので除外せず `probe_unscored` を、
+Probe の API が応答しないとき（タイムアウト 5 秒・5xx）も除外せず `probe_unavailable` をログに残して従来どおり選びます。
 照会結果・除外と理由は `log/*.jsonl` の `probe_filter` と `quotes_collected.excluded` に残ります。`min_probe_score` が 0〜100 の数でなければ RFQ を出す前に止まります。
 
 **受領判定**（買い手）: JSON であること → `fields` が揃っていること → `freshness_hours` → 仕様の `schema`（JSON Schema, Ajv）。

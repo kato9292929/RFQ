@@ -109,9 +109,11 @@ if (MIN_PROBE_SCORE !== undefined && eligible.length) {
     probe_url: PROBE_URL(), min_probe_score: MIN_PROBE_SCORE,
     lookups: [...lookups].map(([quote, l]) => ({ quote, ...l })),
     excluded: r.excluded,
+    probe_unscored: r.unscored,
     probe_unavailable: r.unavailable,
   };
   record("probe_filter", { rfq: rfq.toBase58(), ...probeFilter });
+  if (r.unscored.length) log(`probe_unscored for ${r.unscored.length} quote(s) — kept (no score is not below the minimum)`);
   if (r.unavailable.length) log(`probe_unavailable for ${r.unavailable.length} quote(s) — kept, selection proceeds as before`);
   if (r.excluded.length) log(`probe excluded: ${r.excluded.map((e) => `${e.seller.slice(0, 6)} (${e.why})`).join(", ")}`);
 }

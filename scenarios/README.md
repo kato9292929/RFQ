@@ -14,7 +14,7 @@ same two sellers (offers in `agents/seller/offers.seller{1,2}.json`). What each 
 | schema-reject.json | 0.10 | requires `top_hosts` with `minItems: 50`; seller1 quotes on category/field names (it does not read JSON-Schema constraints), delivers its real 25 rows → buyer pays, then `record_rejection(schema_mismatch)` |
 | schema-accept.json | 0.10 | integer/minimum constraints the real data satisfies → cheapest (seller2) awarded, accepted |
 | sla-tight.json | 0.10 | `max_latency_ms: 10000`; seller2 declared 30000 ms → excluded; seller1 (8000 ms, dearer) awarded; measured latency recorded on-chain |
-| probe-min-score.json | 0.10 | `min_probe_score: 60`; each quote's endpoint host is looked up on x402 Seller Probe. Local/devnet sellers have no Probe score → excluded as `probe_unscored` → buyer cancels. With the Probe API down, nothing is excluded (`probe_unavailable` logged) and the cheapest is awarded as before |
+| probe-min-score.json | 0.10 | `min_probe_score: 60`; each quote's endpoint host is looked up on x402 Seller Probe. Local/devnet sellers have no Probe score → kept, `probe_unscored` logged → cheapest awarded as before. A seller host scored below 60 would be excluded; with the Probe API down nothing is excluded (`probe_unavailable` logged) |
 
 ## Seller pre-quote checks vs buyer acceptance test
 
