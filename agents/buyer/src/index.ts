@@ -17,6 +17,7 @@ import {
   REASONS, appendLog, buyerSignatureFromPayload, connection, env, explorerTx, findLandedPayment, fmtUsdc, loadKeypair, pdas, program, retry, sha256, sleep,
   type Reason,
 } from "../../../lib/common.js";
+import { PROBE_URL, applyProbeFilter, checkMinProbeScore, lookupProbe, type ProbeLookup } from "../../../lib/probe.js";
 
 const { BN } = anchor;
 
@@ -26,6 +27,9 @@ const WINDOW = Number(env("BUYER_RFQ_WINDOW_SEC", "90"));
 const specText = process.env.BUYER_SPEC_FILE
   ? readFileSync(resolve(ROOT, process.env.BUYER_SPEC_FILE), "utf8")
   : JSON.stringify({ category: "market-data", fields: ["endpoint_count", "host_count"], freshness_hours: 24 });
+
+// Fail before posting anything if the optional Probe threshold is malformed.
+const MIN_PROBE_SCORE = checkMinProbeScore(JSON.parse(specText).min_probe_score);
 
 const prog = program(kp);
 const P = pdas(prog.programId);
@@ -77,11 +81,11 @@ while (Math.floor(Date.now() / 1000) < deadline) {
 }
 const detail = await retry(() => json<any>(`${INDEXER_URL()}/rfqs/${rfq.toBase58()}`), "indexer rfq detail");
 const spec = JSON.parse(specText) as {
-  category: string; fields?: string[]; freshness_hours?: number; max_latency_ms?: number; schema?: object;
+  category: string; fields?: string[]; freshness_hours?: number; max_latency_ms?: number; schema?: object; min_probe_score?: number;
 };
 const nowS = Math.floor(Date.now() / 1000);
 const excluded: { quote: string; seller: string; why: string }[] = [];
-const eligible = (detail.quotes as any[]).filter((q) => {
+let eligible = (detail.quotes as any[]).filter((q) => {
   const why =
     q.expires_at <= nowS + 30 ? "quote expires too soon"
     : !q.endpoint_hash_ok ? "endpoint_hash does not match endpoint_uri"
@@ -93,6 +97,26 @@ const eligible = (detail.quotes as any[]).filter((q) => {
   if (why) excluded.push({ quote: q.pubkey, seller: q.seller, why });
   return !why;
 });
+
+// Seller quality gate (x402 Seller Probe). Applied after the price/SLA checks, before the tie-break.
+let probeFilter: Record<string, unknown> | null = null;
+if (MIN_PROBE_SCORE !== undefined && eligible.length) {
+  const lookups = new Map<string, ProbeLookup>(await Promise.all(eligible.map(async (q) => [q.pubkey, await lookupProbe(q.endpoint_uri)] as const)));
+  const r = applyProbeFilter(eligible, lookups, MIN_PROBE_SCORE);
+  eligible = r.kept;
+  excluded.push(...r.excluded);
+  probeFilter = {
+    probe_url: PROBE_URL(), min_probe_score: MIN_PROBE_SCORE,
+    lookups: [...lookups].map(([quote, l]) => ({ quote, ...l })),
+    excluded: r.excluded,
+    probe_unscored: r.unscored,
+    probe_unavailable: r.unavailable,
+  };
+  record("probe_filter", { rfq: rfq.toBase58(), ...probeFilter });
+  if (r.unscored.length) log(`probe_unscored for ${r.unscored.length} quote(s) — kept (no score is not below the minimum)`);
+  if (r.unavailable.length) log(`probe_unavailable for ${r.unavailable.length} quote(s) — kept, selection proceeds as before`);
+  if (r.excluded.length) log(`probe excluded: ${r.excluded.map((e) => `${e.seller.slice(0, 6)} (${e.why})`).join(", ")}`);
+}
 
 /** Slot of the transaction that created the quote (oldest signature touching the PDA). */
 async function creationSlot(quote: string): Promise<number> {
@@ -129,6 +153,7 @@ record("quotes_collected", {
   })),
   excluded,
   tie_break: tieBreak,
+  probe_filter: probeFilter,
 });
 if (!win) {
   log(`no valid quotes — cancelling RFQ${excluded.length ? ` (excluded: ${excluded.map((e) => e.why).join("; ")})` : ""}`);
