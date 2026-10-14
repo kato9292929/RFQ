@@ -106,6 +106,12 @@
   .steps-4 { grid-template-columns:repeat(4,1fr) }
   .gap { margin-top:clamp(40px,6vh,64px); border-top:1.5px solid rgba(255,255,255,.8); padding-top:20px; max-width:820px }
   .gap h3 { font-size:20px; font-weight:700; margin-bottom:10px }
+  /* bold text in the logo's gradient (same stops as the RFQ logo mark) */
+  .tagline strong, .sec-title, .steps h3, .card h3, .gap h3 {
+    width:fit-content; max-width:100%;
+    background:linear-gradient(110deg,#b6df8c 0%,#ecd27c 30%,#efe3d4 55%,#ebc9da 78%,#c6b4ee 100%);
+    -webkit-background-clip:text; background-clip:text; color:transparent; -webkit-text-fill-color:transparent;
+  }
   .gap p, .prose p { font-size:clamp(16px,1.35vw,20px); font-weight:300; line-height:1.6; color:#d6d6d6 }
   .prose { max-width:820px; display:grid; gap:14px }
   .example { max-width:520px; margin-top:clamp(32px,5vh,48px); border-color:transparent; background:linear-gradient(#050505,#050505) padding-box, linear-gradient(120deg,#b6df8c,#ecd27c,#ebc9da,#c6b4ee) border-box }
