@@ -6,7 +6,7 @@ import { CLUSTER, connection, loadKeypair } from "../lib/common.js";
 
 if (CLUSTER() !== "localnet") throw new Error("localnet-setup is for CLUSTER=localnet only");
 const conn = connection();
-const names = ["deployer", "buyer", "seller1", "seller2", "treasury_owner", "facilitator"];
+const names = ["deployer", "buyer", "seller1", "seller2", "treasury_owner", "facilitator", "catalog_seller"];
 for (const n of names) {
   const kp = loadKeypair(`.keys/${n}.json`);
   await conn.confirmTransaction(await conn.requestAirdrop(kp.publicKey, 10 * LAMPORTS_PER_SOL), "confirmed");

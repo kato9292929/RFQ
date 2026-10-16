@@ -10,7 +10,8 @@
     "seller": "tsx agents/seller/src/index.ts",
     "buyer": "tsx agents/buyer/src/index.ts",
     "init-config": "tsx scripts/init-config.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:catalog": "tsx test/catalog-unit.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",

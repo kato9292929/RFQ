@@ -568,6 +568,168 @@
       ]
     },
     {
+      "name": "submit_catalog_quote",
+      "docs": [
+        "Catalog quote: the buyer records, on behalf of a seller listed in the x402 Endpoint",
+        "catalog, the price that seller's endpoint advertised in its 402 response. The seller",
+        "never signs; the Quote's `seller` is a per-host PDA ([\"catalog_seller\", sha256(host)]),",
+        "so catalog sellers aggregate by host. A CatalogQuote PDA ([\"catalog\", quote]) marks the",
+        "source and stores the advertised pay-to address and network. Award, payment and",
+        "fulfillment/rejection then follow the normal flow."
+      ],
+      "discriminator": [
+        109,
+        242,
+        42,
+        239,
+        86,
+        95,
+        120,
+        175
+      ],
+      "accounts": [
+        {
+          "name": "buyer",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "rfq"
+          ]
+        },
+        {
+          "name": "rfq"
+        },
+        {
+          "name": "catalog_seller",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  116,
+                  97,
+                  108,
+                  111,
+                  103,
+                  95,
+                  115,
+                  101,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "host_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "quote",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  113,
+                  117,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "rfq"
+              },
+              {
+                "kind": "account",
+                "path": "catalog_seller"
+              }
+            ]
+          }
+        },
+        {
+          "name": "catalog_quote",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  116,
+                  97,
+                  108,
+                  111,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "quote"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "host",
+          "type": "string"
+        },
+        {
+          "name": "host_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "price",
+          "type": "u64"
+        },
+        {
+          "name": "endpoint_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "endpoint_uri",
+          "type": "string"
+        },
+        {
+          "name": "expires_at",
+          "type": "i64"
+        },
+        {
+          "name": "pay_to",
+          "type": "string"
+        },
+        {
+          "name": "network",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "name": "submit_quote",
       "discriminator": [
         230,
@@ -645,6 +807,19 @@
     }
   ],
   "accounts": [
+    {
+      "name": "CatalogQuote",
+      "discriminator": [
+        143,
+        203,
+        42,
+        45,
+        112,
+        103,
+        208,
+        243
+      ]
+    },
     {
       "name": "Config",
       "discriminator": [
@@ -725,6 +900,19 @@
     }
   ],
   "events": [
+    {
+      "name": "CatalogQuoteRecorded",
+      "discriminator": [
+        185,
+        127,
+        78,
+        210,
+        37,
+        225,
+        9,
+        65
+      ]
+    },
     {
       "name": "LatencyRecorded",
       "discriminator": [
@@ -912,9 +1100,95 @@
       "code": 6018,
       "name": "AlreadyMeasured",
       "msg": "latency already recorded"
+    },
+    {
+      "code": 6019,
+      "name": "BadCatalogField",
+      "msg": "catalog host / pay_to / network empty or too long"
+    },
+    {
+      "code": 6020,
+      "name": "HostHashMismatch",
+      "msg": "host_hash is not sha256(host)"
     }
   ],
   "types": [
+    {
+      "name": "CatalogQuote",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "quote",
+            "type": "pubkey"
+          },
+          {
+            "name": "rfq",
+            "type": "pubkey"
+          },
+          {
+            "name": "recorded_by",
+            "type": "pubkey"
+          },
+          {
+            "name": "host",
+            "type": "string"
+          },
+          {
+            "name": "pay_to",
+            "type": "string"
+          },
+          {
+            "name": "network",
+            "type": "string"
+          },
+          {
+            "name": "observed_at",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CatalogQuoteRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "rfq",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "type": "pubkey"
+          },
+          {
+            "name": "host",
+            "type": "string"
+          },
+          {
+            "name": "pay_to",
+            "type": "string"
+          },
+          {
+            "name": "network",
+            "type": "string"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          }
+        ]
+      }
+    },
     {
       "name": "Config",
       "type": {

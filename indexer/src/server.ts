@@ -42,6 +42,22 @@ async function slaByQuote(): Promise<Map<string, ReturnType<typeof slaJson>>> {
   return new Map(all.map((s) => [s.account.quote.toBase58(), slaJson(s.publicKey, s.account)]));
 }
 
+type CatalogInfo = { host: string; pay_to: string; network: string; observed_at: number; recorded_by: string };
+
+/** Catalog-quote markers keyed by quote pubkey. A quote with one is source "catalog". */
+async function catalogByQuote(): Promise<Map<string, CatalogInfo>> {
+  const all = await retry(() => prog.account.catalogQuote.all(), "catalogQuote.all");
+  return new Map(all.map((c) => [c.account.quote.toBase58(), {
+    host: c.account.host, pay_to: c.account.payTo, network: c.account.network,
+    observed_at: c.account.observedAt.toNumber(), recorded_by: c.account.recordedBy.toBase58(),
+  }]));
+}
+
+async function catalogFor(quote: PublicKey): Promise<CatalogInfo | undefined> {
+  const c = await retry(() => prog.account.catalogQuote.fetchNullable(P.catalogQuote(quote)), "catalogQuote.fetchNullable");
+  return c ? { host: c.host, pay_to: c.payTo, network: c.network, observed_at: c.observedAt.toNumber(), recorded_by: c.recordedBy.toBase58() } : undefined;
+}
+
 function rfqJson(pk: PublicKey, a: RfqAcc, quotes?: { publicKey: PublicKey; account: QuoteAcc }[]) {
   const status = STATUS[a.status] ?? "unknown";
   const deadline = a.deadline.toNumber();
@@ -67,7 +83,8 @@ function rfqJson(pk: PublicKey, a: RfqAcc, quotes?: { publicKey: PublicKey; acco
   };
 }
 
-function quoteJson(pk: PublicKey, q: QuoteAcc, slas?: Map<string, ReturnType<typeof slaJson>>) {
+function quoteJson(pk: PublicKey, q: QuoteAcc, slas?: Map<string, ReturnType<typeof slaJson>>, catalogs?: Map<string, CatalogInfo>) {
+  const catalog = catalogs?.get(pk.toBase58()) ?? null;
   return {
     pubkey: pk.toBase58(),
     rfq: q.rfq.toBase58(),
@@ -80,6 +97,10 @@ function quoteJson(pk: PublicKey, q: QuoteAcc, slas?: Map<string, ReturnType<typ
     expires_at: q.expiresAt.toNumber(),
     created_at: q.createdAt.toNumber(),
     sla: slas?.get(pk.toBase58()) ?? null,
+    // "seller": the seller quoted itself. "catalog": the buyer recorded the price the
+    // seller's own 402 advertised (x402 Endpoint catalog); the seller never signed.
+    source: catalog ? "catalog" : "seller",
+    catalog,
   };
 }
 
@@ -94,7 +115,7 @@ const verifyCache = new Map<string, Verification>();
  * Check that the x402 payment tx actually moved `quote.price` of the configured
  * USDC mint from the RFQ buyer to the quoting seller, and succeeded.
  */
-async function verifyPayment(sigB58: string, rfq: RfqAcc, quote: QuoteAcc, usdcMint: string): Promise<Verification> {
+async function verifyPayment(sigB58: string, rfq: RfqAcc, quote: QuoteAcc, usdcMint: string, catalog?: CatalogInfo): Promise<Verification> {
   const cached = verifyCache.get(sigB58);
   if (cached?.verified) return cached;
   const done = (verified: boolean, reason: string, details?: Record<string, unknown>) => {
@@ -112,7 +133,8 @@ async function verifyPayment(sigB58: string, rfq: RfqAcc, quote: QuoteAcc, usdcM
       arr.filter((b) => b.mint === usdcMint && b.owner === owner).reduce((s, b) => s + BigInt(b.uiTokenAmount.amount), 0n);
     return amt(post) - amt(pre);
   };
-  const seller = quote.seller.toBase58();
+  // A catalog seller is paid at the address its 402 advertised, not at the per-host PDA.
+  const seller = catalog?.pay_to ?? quote.seller.toBase58();
   const buyer = rfq.buyer.toBase58();
   const sellerDelta = delta(seller);
   const buyerDelta = delta(buyer);
@@ -199,9 +221,10 @@ app.get(
     const rejPk = P.rejection(pk);
     const rej = await retry(() => prog.account.rejection.fetchNullable(rejPk), "rejection.fetchNullable");
     const slas = await slaByQuote();
+    const catalogs = await catalogByQuote();
     res.json({
       ...rfqJson(pk, r, quotes),
-      quotes: quotes.map((q) => quoteJson(q.publicKey, q.account, slas)).sort((a, b) => Number(BigInt(a.price) - BigInt(b.price))),
+      quotes: quotes.map((q) => quoteJson(q.publicKey, q.account, slas, catalogs)).sort((a, b) => Number(BigInt(a.price) - BigInt(b.price))),
       fulfillment: f ? { pubkey: fpk.toBase58(), payment_sig: bs58.encode(Buffer.from(f.paymentSig)), response_hash: hex(f.responseHash) } : null,
       rejection: rej
         ? { pubkey: rejPk.toBase58(), payment_sig: bs58.encode(Buffer.from(rej.paymentSig)), response_hash: hex(rej.responseHash),
@@ -218,16 +241,21 @@ app.get(
     const filters = seller ? [{ memcmp: { offset: 8 + 32, bytes: new PublicKey(seller).toBase58() } }] : [];
     const quotes = await retry(() => prog.account.quote.all(filters), "quote.all");
     const slas = await slaByQuote();
-    res.json(quotes.map((q) => quoteJson(q.publicKey, q.account, slas)).sort((a, b) => b.created_at - a.created_at));
+    const catalogs = await catalogByQuote();
+    let out = quotes.map((q) => quoteJson(q.publicKey, q.account, slas, catalogs));
+    const source = req.query.source as string | undefined;
+    if (source) out = out.filter((q) => q.source === source);
+    res.json(out.sort((a, b) => b.created_at - a.created_at));
   }),
 );
 
 async function fulfillmentJson(pk: PublicKey, f: FulfillmentAcc, usdcMint: string) {
   const sig = bs58.encode(Buffer.from(f.paymentSig));
   const [rfq, quote] = await Promise.all([retry(() => prog.account.rfq.fetch(f.rfq), "rfq.fetch"), retry(() => prog.account.quote.fetch(f.quote), "quote.fetch")]);
+  const catalog = await catalogFor(f.quote);
   let v: Verification;
   try {
-    v = await verifyPayment(sig, rfq, quote, usdcMint);
+    v = await verifyPayment(sig, rfq, quote, usdcMint, catalog);
   } catch (e: any) {
     v = { verified: false, reason: `verification error: ${e?.message ?? e}`, checked_at: now() };
   }
@@ -290,9 +318,10 @@ async function rejectionJson(pk: PublicKey, r: RejectionAcc, usdcMint: string) {
     retry(() => prog.account.rfq.fetch(r.rfq), "rfq.fetch"),
     retry(() => prog.account.quote.fetch(r.quote), "quote.fetch"),
   ]);
+  const catalog = await catalogFor(r.quote);
   let v: Verification;
   try {
-    v = await verifyPayment(sig, rfq, quote, usdcMint);
+    v = await verifyPayment(sig, rfq, quote, usdcMint, catalog);
   } catch (e: any) {
     v = { verified: false, reason: `verification error: ${e?.message ?? e}`, checked_at: now() };
   }
@@ -333,15 +362,19 @@ app.get(
     const rfqs = await retry(() => prog.account.rfq.all(), "rfq.all");
     const quotes = await retry(() => prog.account.quote.all(), "quote.all");
     const slas = await slaByQuote();
+    const catalogs = await catalogByQuote();
     const rfqByPk = new Map(rfqs.map((r) => [r.publicKey.toBase58(), r.account]));
     const rows = new Map<string, any>();
     for (const q of quotes) {
       const seller = q.account.seller.toBase58();
+      const cat = catalogs.get(q.publicKey.toBase58());
+      // Catalog sellers are keyed by a per-host PDA, so one row per host.
       const row = rows.get(seller) ?? {
-        seller, quotes: 0, awarded: 0, fulfilled: 0, rejected: 0, rejected_by_reason: {} as Record<string, number>,
+        seller, source: cat ? "catalog" : "seller", host: cat?.host ?? null, pay_to: [] as string[], quotes: 0, awarded: 0, fulfilled: 0, rejected: 0, rejected_by_reason: {} as Record<string, number>,
         sla_declared: 0, sla_measured: 0, sla_met: 0, endpoint_hosts: [] as string[],
       };
       row.quotes++;
+      if (cat && !row.pay_to.includes(cat.pay_to)) row.pay_to.push(cat.pay_to);
       // Hosts this seller quoted endpoints on (same key as x402 Seller Probe), so the
       // track record can be joined to Probe scores by host.
       const host = probeHost(q.account.endpointUri);

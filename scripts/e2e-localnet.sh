@@ -9,7 +9,7 @@ export FACILITATOR_URL=http://127.0.0.1:8790 FACILITATOR_KEYPAIR=.keys/facilitat
 export X402_NETWORK=${X402_NETWORK:-solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1}
 export RUN_DIR=run/localnet
 mkdir -p .keys "$RUN_DIR"
-for k in deployer buyer seller1 seller2 treasury_owner facilitator; do
+for k in deployer buyer seller1 seller2 treasury_owner facilitator catalog_seller; do
   [ -f .keys/$k.json ] || solana-keygen new --no-bip39-passphrase -s -o .keys/$k.json >/dev/null
 done
 PROGRAM_ID=$(solana-keygen pubkey target/deploy/rfq_market-keypair.json)
@@ -27,5 +27,10 @@ echo "local test USDC mint: $USDC_MINT"
 npx tsx scripts/init-config.ts
 node --import tsx facilitator/src/server.ts > "$RUN_DIR/facilitator.log" 2>&1 & PIDS+=($!)
 for _ in $(seq 1 30); do curl -sf $FACILITATOR_URL/supported >/dev/null && break; sleep 1; done
+if [ "${MOCK_CATALOG:-0}" = 1 ]; then   # a plain x402 seller for catalog-quote tests
+  node --import tsx scripts/mock-catalog-seller.ts > "$RUN_DIR/mock-catalog.log" 2>&1 & PIDS+=($!)
+  for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:8810/api/free && break; sleep 1; done
+  export CATALOG_FILE=test/catalog-local.json CATALOG_PATHS_FILE=test/catalog-paths-local.json CATALOG_PAY_HOSTS=127.0.0.1
+fi
 
 bash scripts/e2e-run.sh

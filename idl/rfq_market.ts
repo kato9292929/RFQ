@@ -574,6 +574,168 @@ export type RfqMarket = {
       ]
     },
     {
+      "name": "submitCatalogQuote",
+      "docs": [
+        "Catalog quote: the buyer records, on behalf of a seller listed in the x402 Endpoint",
+        "catalog, the price that seller's endpoint advertised in its 402 response. The seller",
+        "never signs; the Quote's `seller` is a per-host PDA ([\"catalog_seller\", sha256(host)]),",
+        "so catalog sellers aggregate by host. A CatalogQuote PDA ([\"catalog\", quote]) marks the",
+        "source and stores the advertised pay-to address and network. Award, payment and",
+        "fulfillment/rejection then follow the normal flow."
+      ],
+      "discriminator": [
+        109,
+        242,
+        42,
+        239,
+        86,
+        95,
+        120,
+        175
+      ],
+      "accounts": [
+        {
+          "name": "buyer",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "rfq"
+          ]
+        },
+        {
+          "name": "rfq"
+        },
+        {
+          "name": "catalogSeller",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  116,
+                  97,
+                  108,
+                  111,
+                  103,
+                  95,
+                  115,
+                  101,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "hostHash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "quote",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  113,
+                  117,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "rfq"
+              },
+              {
+                "kind": "account",
+                "path": "catalogSeller"
+              }
+            ]
+          }
+        },
+        {
+          "name": "catalogQuote",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  116,
+                  97,
+                  108,
+                  111,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "quote"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "host",
+          "type": "string"
+        },
+        {
+          "name": "hostHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "price",
+          "type": "u64"
+        },
+        {
+          "name": "endpointHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "endpointUri",
+          "type": "string"
+        },
+        {
+          "name": "expiresAt",
+          "type": "i64"
+        },
+        {
+          "name": "payTo",
+          "type": "string"
+        },
+        {
+          "name": "network",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "name": "submitQuote",
       "discriminator": [
         230,
@@ -651,6 +813,19 @@ export type RfqMarket = {
     }
   ],
   "accounts": [
+    {
+      "name": "catalogQuote",
+      "discriminator": [
+        143,
+        203,
+        42,
+        45,
+        112,
+        103,
+        208,
+        243
+      ]
+    },
     {
       "name": "config",
       "discriminator": [
@@ -731,6 +906,19 @@ export type RfqMarket = {
     }
   ],
   "events": [
+    {
+      "name": "catalogQuoteRecorded",
+      "discriminator": [
+        185,
+        127,
+        78,
+        210,
+        37,
+        225,
+        9,
+        65
+      ]
+    },
     {
       "name": "latencyRecorded",
       "discriminator": [
@@ -918,9 +1106,95 @@ export type RfqMarket = {
       "code": 6018,
       "name": "alreadyMeasured",
       "msg": "latency already recorded"
+    },
+    {
+      "code": 6019,
+      "name": "badCatalogField",
+      "msg": "catalog host / pay_to / network empty or too long"
+    },
+    {
+      "code": 6020,
+      "name": "hostHashMismatch",
+      "msg": "host_hash is not sha256(host)"
     }
   ],
   "types": [
+    {
+      "name": "catalogQuote",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "quote",
+            "type": "pubkey"
+          },
+          {
+            "name": "rfq",
+            "type": "pubkey"
+          },
+          {
+            "name": "recordedBy",
+            "type": "pubkey"
+          },
+          {
+            "name": "host",
+            "type": "string"
+          },
+          {
+            "name": "payTo",
+            "type": "string"
+          },
+          {
+            "name": "network",
+            "type": "string"
+          },
+          {
+            "name": "observedAt",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "catalogQuoteRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "rfq",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "type": "pubkey"
+          },
+          {
+            "name": "host",
+            "type": "string"
+          },
+          {
+            "name": "payTo",
+            "type": "string"
+          },
+          {
+            "name": "network",
+            "type": "string"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          }
+        ]
+      }
+    },
     {
       "name": "config",
       "type": {

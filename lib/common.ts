@@ -51,9 +51,10 @@ export const INDEXER_URL = () => env("INDEXER_URL", "http://127.0.0.1:8787");
 export const X402_NETWORK = () => env("X402_NETWORK", SOLANA_DEVNET_CAIP2);
 export const FACILITATOR_URL = () => env("FACILITATOR_URL", "https://x402.org/facilitator");
 
-export function loadKeypair(path: string): Keypair {
-  const p = resolve(ROOT, path);
-  return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(p, "utf8"))));
+/** A keypair from a file path, or from the JSON byte array itself (e.g. an env secret). */
+export function loadKeypair(pathOrJson: string): Keypair {
+  const raw = pathOrJson.trim().startsWith("[") ? pathOrJson : readFileSync(resolve(ROOT, pathOrJson), "utf8");
+  return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(raw)));
 }
 
 export function connection(): Connection {
@@ -91,11 +92,14 @@ export function pdas(programId: PublicKey) {
     fulfillment: (rfq: PublicKey) => find([Buffer.from("fulfillment"), rfq.toBuffer()]),
     rejection: (rfq: PublicKey) => find([Buffer.from("rejection"), rfq.toBuffer()]),
     sla: (quote: PublicKey) => find([Buffer.from("sla"), quote.toBuffer()]),
+    catalogSeller: (host: string) => find([Buffer.from("catalog_seller"), sha256(host)]),
+    catalogQuote: (quote: PublicKey) => find([Buffer.from("catalog"), quote.toBuffer()]),
   };
 }
 
 export function explorerTx(sig: string): string {
   const c = CLUSTER();
+  if (c === "mainnet") return `https://explorer.solana.com/tx/${sig}`;
   return c === "devnet" ? `https://explorer.solana.com/tx/${sig}?cluster=devnet` : `localnet:${sig}`;
 }
 

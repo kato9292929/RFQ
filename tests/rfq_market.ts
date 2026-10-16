@@ -336,4 +336,64 @@ describe("rfq_market", () => {
       "DeadlinePassed",
     );
   });
+
+  // ---------------------------------------------------------------- catalog quotes
+  const h = (host: string) => [...sha256(host)];
+  const catalogSeller = (host: string) =>
+    PublicKey.findProgramAddressSync([Buffer.from("catalog_seller"), sha256(host)], program.programId)[0];
+
+  async function catalogQuote(rfq: PublicKey, host: string, price: number, signer = buyer, hostHash = h(host)) {
+    const uri = `https://${host}/api/paid`;
+    await program.methods
+      .submitCatalogQuote(host, hostHash, new BN(price), [...sha256(uri)], uri, new BN(now() + 600), "PayTo1111111111111111111111111111111111111", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp")
+      .accountsPartial({ buyer: signer.publicKey, rfq, catalogSeller: catalogSeller(host) })
+      .signers([signer])
+      .rpc();
+    return P.quote(rfq, catalogSeller(host));
+  }
+
+  it("catalog quote: buyer records it, seller = per-host PDA, meta stored; award + fulfillment follow the normal flow", async () => {
+    const rfq = await postRfq(100_000, 60);
+    const q = await catalogQuote(rfq, "osd.example.com", 1_000);
+    const quote = await program.account.quote.fetch(q);
+    expect(quote.seller.toBase58()).to.eq(catalogSeller("osd.example.com").toBase58());
+    expect(quote.price.toNumber()).to.eq(1_000);
+    const [metaPk] = PublicKey.findProgramAddressSync([Buffer.from("catalog"), q.toBuffer()], program.programId);
+    const meta = await program.account.catalogQuote.fetch(metaPk);
+    expect(meta.host).to.eq("osd.example.com");
+    expect(meta.network).to.eq("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp");
+    expect(meta.recordedBy.toBase58()).to.eq(buyer.publicKey.toBase58());
+
+    const before = (await getAccount(conn, treasury)).amount;
+    await program.methods
+      .award()
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: q, buyerUsdc, treasury, tokenProgram: TOKEN_PROGRAM_ID })
+      .signers([buyer])
+      .rpc();
+    expect((await getAccount(conn, treasury)).amount - before).to.eq(10n); // 1% of 1_000
+    await program.methods
+      .recordFulfillment([...Buffer.alloc(64, 3)], [...sha256("body")])
+      .accountsPartial({ buyer: buyer.publicKey, rfq, quote: q })
+      .signers([buyer])
+      .rpc();
+    expect((await program.account.rfq.fetch(rfq)).status).to.eq(2);
+  });
+
+  it("catalog quote: only the RFQ buyer can record one", async () => {
+    const rfq = await postRfq(100_000, 60);
+    await expectErr(catalogQuote(rfq, "x.example.com", 1_000, stranger), "NotBuyer");
+  });
+
+  it("catalog quote: host_hash must be sha256(host); price <= max_price; one per host per RFQ", async () => {
+    const rfq = await postRfq(100_000, 60);
+    await expectErr(catalogQuote(rfq, "a.example.com", 1_000, buyer, h("b.example.com")), "");
+    await expectErr(catalogQuote(rfq, "a.example.com", 100_001), "PriceAboveMax");
+    await catalogQuote(rfq, "a.example.com", 1_000);
+    try {
+      await catalogQuote(rfq, "a.example.com", 900);
+      expect.fail("second catalog quote for the same host should fail");
+    } catch (e: any) {
+      expect(String(e)).to.match(/already in use|custom program error: 0x0/);
+    }
+  });
 });
