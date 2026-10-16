@@ -130,6 +130,9 @@
   .tile-no { font-size:clamp(72px,9vw,150px); line-height:1; font-weight:400; letter-spacing:-0.02em; color:transparent; -webkit-text-stroke:1.5px rgba(255,255,255,.9) }
   .tile-label { font-size:13px; letter-spacing:.14em; text-transform:uppercase; color:#bdbdbd }
   .asof { margin-top:20px; font-size:13px; color:#8c8c8c }
+  /* which network a block of records comes from */
+  .net-label { display:inline-block; margin-bottom:14px; padding:3px 10px; border:1px solid rgba(255,255,255,.45); border-radius:999px; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#d6d6d6 }
+  .net-label[data-network="mainnet"] { border-color:transparent; color:#000; background:linear-gradient(110deg,#b6df8c,#ecd27c,#efe3d4,#ebc9da,#c6b4ee) }
   .facts { margin-top:36px; padding:20px 22px; border:1px solid rgba(255,255,255,.18); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:14px; line-height:1.8; color:#d6d6d6; overflow-x:auto; max-width:100% }
   .links { list-style:none; display:flex; flex-wrap:wrap; gap:12px 28px; margin-top:24px; font-size:15px }
 
@@ -270,6 +273,7 @@
   </section>
 
   <section class="sec" id="records">
+    <span class="net-label" data-network="devnet">devnet</span>
     <h2 class="sec-title">Devnet so far</h2>
     <div class="tiles">
       <div class="tile"><span class="tile-no">13</span><span class="tile-label">requests</span></div>

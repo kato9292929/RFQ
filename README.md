@@ -149,7 +149,7 @@ feePayer は `CKPKJWNdJEqa81x7CkZ14BVPiY6y16Sxs7owznqtWYp5`。本実装は x402 
 ## mainnet
 
 市場のプログラムも支払いも Solana mainnet で動かします（devnet の記録はそのまま過去の実績として残します）。自社のデモ売り手 2 体は mainnet では使いません。
-鍵はリポジトリにもコンテナにも置かず、環境の secret（JSON のバイト配列）で渡します。スクリプトは実行中だけ `run/mainnet/keys/` に 0600 で書き出し、終了時に消します。
+鍵はリポジトリにもコンテナにも置かず、環境の secret（JSON のバイト配列）で渡します。公開アドレスは `docs/wallet.md`。スクリプトは実行中だけ `run/mainnet/keys/` に 0600 で書き出し、終了時に消します。
 
 ```bash
 # デプロイ + Config（mainnet USDC、手数料 1%）。deployer に約 2.2 SOL（プログラムの rent ≈ 1.88 SOL）
@@ -159,6 +159,18 @@ CONFIRM_MAINNET=yes MAINNET_RPC_URL=... MAINNET_BUYER_KEYPAIR='[...]' bash scrip
 ```
 
 `MAINNET_RPC_URL` は `getProgramAccounts` を許す RPC が必要です（公開の api.mainnet-beta は indexer の一覧取得に向きません）。
+
+### Upgrade authority
+
+mainnet のプログラムは **immutable にしません**。upgrade authority は deployer に残し、不具合があれば同じプログラム ID のまま差し替えられるようにしています。
+authority の公開アドレスは、デプロイ時に `scripts/deploy-mainnet.sh` が `solana program show` で確認したうえで `log/deploy.md` に記録します（`docs/wallet.md` にも転記）。
+アドレスはデプロイ後に記入します（未デプロイ）。
+
+immutable にする条件（案。すべて満たしたら `solana program set-upgrade-authority --final` を実行し、その tx を `log/deploy.md` に記録する）:
+1. mainnet で 30 日以上、プログラムの差し替えなしに運用できている
+2. 第三者の売り手を含むカタログ見積もりの売買が記録され、成立・`not_delivered` の両方の経路が mainnet で通っている
+3. その時点のソースを第三者がレビューし、指摘が解消されている
+4. 後から足す命令（例：売り手の反対記録）を別プログラムで足す方針が決まっている
 
 ## やらないこと
 
