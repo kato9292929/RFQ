@@ -18,6 +18,10 @@ import {
   type Reason,
 } from "../../../lib/common.js";
 import { PROBE_URL, applyProbeFilter, checkMinProbeScore, lookupProbe, type ProbeLookup } from "../../../lib/probe.js";
+import {
+  catalogSpentToday, fetch402, hostOf, loadCatalog, loadPathOverrides, maxPerCall, maxPerDay, payHosts, pickAccept, selectCatalogUrls,
+  type CatalogMatch,
+} from "../../../lib/catalog.js";
 
 const { BN } = anchor;
 
@@ -69,6 +73,48 @@ record("post_rfq", {
   max_price: MAX_PRICE.toString(), max_price_usdc: fmtUsdc(MAX_PRICE), deadline, tx: postSig, explorer: explorerTx(postSig),
 });
 
+// 2b. catalog quotes: read each catalog endpoint's own 402 and record its price as a quote.
+const catalogMatch = (JSON.parse(specText) as { catalog_match?: CatalogMatch }).catalog_match;
+if (catalogMatch) {
+  const catalog = loadCatalog();
+  const urls = selectCatalogUrls(catalog.endpoints, catalogMatch, loadPathOverrides());
+  const cap = (() => {
+    const perCall = maxPerCall();
+    const usd = catalogMatch.max_price_usdc !== undefined ? BigInt(Math.round(catalogMatch.max_price_usdc * 1e6)) : perCall;
+    return [perCall, usd, MAX_PRICE].reduce((m, x) => (x < m ? x : m));
+  })();
+  log(`catalog: ${urls.length} endpoint(s) from ${catalog.source} (cap ${fmtUsdc(cap)} USDC per call)`);
+  const best = new Map<string, { url: string; amount: bigint; payTo: string; network: string }>();
+  for (const url of urls) {
+    const host = hostOf(url)!;
+    const r = await fetch402(url);
+    const picked = r.ok ? pickAccept(r.accepts, X402_NETWORK(), cfg.usdcMint.toBase58(), cap) : r;
+    record("catalog_402", {
+      rfq: rfq.toBase58(), url, host, ok: picked.ok,
+      ...(picked.ok ? { amount: picked.amount.toString(), pay_to: picked.payTo, network: picked.network } : { reason: picked.reason }),
+      ...(r.ok ? { accepts: r.accepts } : {}),
+    });
+    if (!picked.ok) {
+      log(`catalog skip ${url}: ${picked.reason}`);
+      continue;
+    }
+    const cur = best.get(host); // one catalog quote per host per RFQ (the quote PDA is per host)
+    if (!cur || picked.amount < cur.amount) best.set(host, { url, amount: picked.amount, payTo: picked.payTo, network: picked.network });
+  }
+  for (const [host, b] of best) {
+    const hostHash = sha256(host);
+    const sig = await prog.methods
+      .submitCatalogQuote(host, [...hostHash], new BN(b.amount.toString()), [...sha256(b.url)], b.url, new BN(deadline + 1800), b.payTo, b.network)
+      .accountsPartial({ buyer: me, rfq, catalogSeller: P.catalogSeller(host) })
+      .rpc();
+    log(`catalog quote ${host} ${fmtUsdc(b.amount)} USDC (${b.url}) tx=${sig}`);
+    record("catalog_quote", {
+      rfq: rfq.toBase58(), host, url: b.url, price: b.amount.toString(), price_usdc: fmtUsdc(b.amount), pay_to: b.payTo, network: b.network,
+      seller: P.catalogSeller(host).toBase58(), quote: P.quote(rfq, P.catalogSeller(host)).toBase58(), tx: sig, explorer: explorerTx(sig),
+    });
+  }
+}
+
 // 3. collect quotes until the deadline
 let seen = 0;
 while (Math.floor(Date.now() / 1000) < deadline) {
@@ -83,6 +129,9 @@ const detail = await retry(() => json<any>(`${INDEXER_URL()}/rfqs/${rfq.toBase58
 const spec = JSON.parse(specText) as {
   category: string; fields?: string[]; freshness_hours?: number; max_latency_ms?: number; schema?: object; min_probe_score?: number;
 };
+// Catalog payment limits, enforced here and again right before signing.
+const allowedPayHosts = payHosts();
+const spentToday = catalogSpentToday();
 const nowS = Math.floor(Date.now() / 1000);
 const excluded: { quote: string; seller: string; why: string }[] = [];
 let eligible = (detail.quotes as any[]).filter((q) => {
@@ -93,6 +142,10 @@ let eligible = (detail.quotes as any[]).filter((q) => {
     : spec.max_latency_ms !== undefined && !q.sla ? `no SLA declared (spec max_latency_ms=${spec.max_latency_ms})`
     : spec.max_latency_ms !== undefined && q.sla.max_latency_ms > spec.max_latency_ms
       ? `SLA ${q.sla.max_latency_ms}ms > spec max_latency_ms=${spec.max_latency_ms}`
+    : q.source === "catalog" && !allowedPayHosts.includes(q.catalog?.host) ? `catalog host ${q.catalog?.host} not in CATALOG_PAY_HOSTS`
+    : q.source === "catalog" && BigInt(q.price) > maxPerCall() ? `catalog price above per-call cap ${fmtUsdc(maxPerCall())}`
+    : q.source === "catalog" && spentToday + BigInt(q.price) > maxPerDay()
+      ? `catalog daily cap: spent ${fmtUsdc(spentToday)} + ${q.price_usdc} > ${fmtUsdc(maxPerDay())}`
     : "";
   if (why) excluded.push({ quote: q.pubkey, seller: q.seller, why });
   return !why;
@@ -149,7 +202,7 @@ record("quotes_collected", {
   rfq: rfq.toBase58(),
   quotes: detail.quotes.map((q: any) => ({
     quote: q.pubkey, seller: q.seller, price: q.price, endpoint_uri: q.endpoint_uri, created_at: q.created_at,
-    sla_ms: q.sla?.max_latency_ms ?? null,
+    sla_ms: q.sla?.max_latency_ms ?? null, source: q.source, catalog: q.catalog ?? null,
   })),
   excluded,
   tie_break: tieBreak,
@@ -181,15 +234,18 @@ record("award", {
 });
 
 // 5. x402: GET → 402 → signed GET (exactly one paid call)
+const isCatalog = win.source === "catalog";
+// Catalog sellers are paid at the address and network their own 402 advertised.
+const payTo: string = isCatalog ? win.catalog.pay_to : win.seller;
 const signer = await createKeyPairSignerFromBytes(kp.secretKey);
-const network = X402_NETWORK() as `${string}:${string}`;
+const network = (isCatalog ? win.catalog.network : X402_NETWORK()) as `${string}:${string}`;
 const client = x402Client.fromConfig({
   schemes: [{ network, client: new ExactSvmScheme(signer, { rpcUrl: RPC_URL() }) }],
   spendControls: { allowedAssets: [{ network, asset: cfg.usdcMint.toBase58(), maxAmountPerPayment: win.price }] },
   // Only pay the awarded seller, the awarded price, in the configured mint.
   policies: [
     (_v, reqs) =>
-      reqs.filter((r: any) => r.payTo === win.seller && r.amount === win.price && r.asset === cfg.usdcMint.toBase58() && r.scheme === "exact"),
+      reqs.filter((r: any) => r.payTo === payTo && r.amount === win.price && r.asset === cfg.usdcMint.toBase58() && r.scheme === "exact" && r.network === network),
   ],
 });
 const http = new x402HTTPClient(client);
@@ -208,11 +264,22 @@ const req0 = required.accepts[0];
 log(`402 received: ${req0.scheme} ${req0.network} amount=${req0.amount} asset=${req0.asset} payTo=${req0.payTo}`);
 record("x402_payment_required", { rfq: rfq.toBase58(), endpoint_uri: win.endpoint_uri, accepts: required.accepts });
 
+if (isCatalog) {
+  // Hard stop right before signing: per-call and per-day caps for catalog sellers.
+  const spent = catalogSpentToday();
+  if (BigInt(win.price) > maxPerCall() || spent + BigInt(win.price) > maxPerDay()) {
+    record("catalog_cap_refused", { rfq: rfq.toBase58(), price: win.price, spent_today: spent.toString(), max_per_call: maxPerCall().toString(), max_per_day: maxPerDay().toString() });
+    throw new Error(`catalog cap: price ${win.price}, spent today ${spent} (per call ${maxPerCall()}, per day ${maxPerDay()})`);
+  }
+}
 const payload = await http.createPaymentPayload(required);
 // Write the buyer's own signature of the payment tx before sending: it is the key
 // for finding the transfer later if the paid call does not return the data.
 const buyerPaymentSig = buyerSignatureFromPayload(payload, me);
-record("x402_payment_sent", { rfq: rfq.toBase58(), seller: win.seller, amount: win.price, buyer_signature: buyerPaymentSig });
+record("x402_payment_sent", {
+  rfq: rfq.toBase58(), seller: win.seller, pay_to: payTo, network, amount: win.price, source: win.source ?? "seller",
+  host: win.catalog?.host ?? null, buyer_signature: buyerPaymentSig,
+});
 // Measured latency = the paid call end to end (request → settled response body), which
 // is what the seller's declared SLA covers.
 const t0 = performance.now();
@@ -276,11 +343,13 @@ function accept(): { ok: true } | { ok: false; reason: Reason; detail: unknown }
   } catch {
     return { ok: false, reason: "invalid_response", detail: "body is not JSON" };
   }
-  const data = body?.data;
+  // Our sellers wrap the payload as {data, source}; a catalog seller's body is the data itself,
+  // with no common freshness field, so freshness_hours applies to our sellers only.
+  const data = isCatalog ? body : body?.data;
   if (!data || typeof data !== "object") return { ok: false, reason: "invalid_response", detail: "no data object" };
   const missing = (spec.fields ?? []).filter((f) => data[f] === undefined || data[f] === null);
   if (missing.length) return { ok: false, reason: "missing_fields", detail: { missing } };
-  if (spec.freshness_hours !== undefined) {
+  if (spec.freshness_hours !== undefined && !isCatalog) {
     const gen = Date.parse(body?.source?.generated_at ?? "");
     const ageH = (Date.now() - gen) / 3_600_000;
     if (!Number.isFinite(ageH) || ageH > spec.freshness_hours)

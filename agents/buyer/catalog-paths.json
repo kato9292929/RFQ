@@ -1,0 +1,4 @@
+{
+  "osd.x402jp.com": ["https://osd.x402jp.com/api/catalyst/NVDA"],
+  "jin.x402jp.com": ["https://jin.x402jp.com/api/jin/series", "https://jin.x402jp.com/api/jin/movers"]
+}

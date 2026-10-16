@@ -4,7 +4,12 @@ import { getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { appendLog, connection, env, explorerTx, loadKeypair, pdas, program } from "../lib/common.js";
 
 const authority = loadKeypair(env("DEPLOYER_KEYPAIR", ".keys/deployer.json"));
-const treasuryOwner = loadKeypair(env("TREASURY_OWNER_KEYPAIR", ".keys/treasury_owner.json"));
+// Only the owner's public key is needed: TREASURY_OWNER_PUBKEY, or the pubkey of TREASURY_OWNER_KEYPAIR.
+const treasuryOwner = {
+  publicKey: process.env.TREASURY_OWNER_PUBKEY
+    ? new PublicKey(process.env.TREASURY_OWNER_PUBKEY)
+    : loadKeypair(env("TREASURY_OWNER_KEYPAIR", ".keys/treasury_owner.json")).publicKey,
+};
 const mint = new PublicKey(env("USDC_MINT"));
 const feeBps = Number(env("FEE_BPS", "100"));
 const prog = program(authority);

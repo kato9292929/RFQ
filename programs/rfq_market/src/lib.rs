@@ -4,6 +4,9 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 declare_id!("7XpxowqbuaEbQ3VkuQemFi7B3aMuat7eKtp5kydGvsVp");
 
 pub const MAX_URI_LEN: usize = 200;
+pub const MAX_HOST_LEN: usize = 100;
+pub const MAX_PAY_TO_LEN: usize = 64;
+pub const MAX_NETWORK_LEN: usize = 64;
 pub const MAX_FEE_BPS: u16 = 10_000;
 
 pub const STATUS_OPEN: u8 = 0;
@@ -108,6 +111,79 @@ pub mod rfq_market {
             seller: quote.seller,
             price,
             expires_at,
+        });
+        Ok(())
+    }
+
+    /// Catalog quote: the buyer records, on behalf of a seller listed in the x402 Endpoint
+    /// catalog, the price that seller's endpoint advertised in its 402 response. The seller
+    /// never signs; the Quote's `seller` is a per-host PDA (["catalog_seller", sha256(host)]),
+    /// so catalog sellers aggregate by host. A CatalogQuote PDA (["catalog", quote]) marks the
+    /// source and stores the advertised pay-to address and network. Award, payment and
+    /// fulfillment/rejection then follow the normal flow.
+    pub fn submit_catalog_quote(
+        ctx: Context<SubmitCatalogQuote>,
+        host: String,
+        host_hash: [u8; 32],
+        price: u64,
+        endpoint_hash: [u8; 32],
+        endpoint_uri: String,
+        expires_at: i64,
+        pay_to: String,
+        network: String,
+    ) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let rfq = &ctx.accounts.rfq;
+        require!(rfq.status == STATUS_OPEN, RfqError::RfqNotOpen);
+        require!(now < rfq.deadline, RfqError::DeadlinePassed);
+        require!(price > 0, RfqError::ZeroPrice);
+        require!(price <= rfq.max_price, RfqError::PriceAboveMax);
+        require!(expires_at > now, RfqError::QuoteExpired);
+        require!(endpoint_uri.len() <= MAX_URI_LEN, RfqError::UriTooLong);
+        require!(!host.is_empty() && host.len() <= MAX_HOST_LEN, RfqError::BadCatalogField);
+        require!(!pay_to.is_empty() && pay_to.len() <= MAX_PAY_TO_LEN, RfqError::BadCatalogField);
+        require!(!network.is_empty() && network.len() <= MAX_NETWORK_LEN, RfqError::BadCatalogField);
+        require!(
+            solana_sha256_hasher::hash(host.as_bytes()).to_bytes() == host_hash,
+            RfqError::HostHashMismatch
+        );
+
+        let seller = ctx.accounts.catalog_seller.key();
+        let quote = &mut ctx.accounts.quote;
+        quote.rfq = rfq.key();
+        quote.seller = seller;
+        quote.price = price;
+        quote.endpoint_hash = endpoint_hash;
+        quote.endpoint_uri = endpoint_uri;
+        quote.expires_at = expires_at;
+        quote.created_at = now;
+        quote.bump = ctx.bumps.quote;
+
+        let meta = &mut ctx.accounts.catalog_quote;
+        meta.quote = quote.key();
+        meta.rfq = rfq.key();
+        meta.recorded_by = ctx.accounts.buyer.key();
+        meta.host = host;
+        meta.pay_to = pay_to;
+        meta.network = network;
+        meta.observed_at = now;
+        meta.bump = ctx.bumps.catalog_quote;
+
+        emit!(QuoteSubmitted {
+            rfq: quote.rfq,
+            quote: quote.key(),
+            seller,
+            price,
+            expires_at,
+        });
+        emit!(CatalogQuoteRecorded {
+            rfq: meta.rfq,
+            quote: meta.quote,
+            seller,
+            host: meta.host.clone(),
+            pay_to: meta.pay_to.clone(),
+            network: meta.network.clone(),
+            price,
         });
         Ok(())
     }
@@ -355,6 +431,22 @@ pub struct Sla {
     pub bump: u8,
 }
 
+#[account]
+#[derive(InitSpace)]
+pub struct CatalogQuote {
+    pub quote: Pubkey,
+    pub rfq: Pubkey,
+    pub recorded_by: Pubkey,
+    #[max_len(100)]
+    pub host: String,
+    #[max_len(64)]
+    pub pay_to: String,
+    #[max_len(64)]
+    pub network: String,
+    pub observed_at: i64,
+    pub bump: u8,
+}
+
 // ---------------------------------------------------------------- contexts
 
 #[derive(Accounts)]
@@ -398,6 +490,35 @@ pub struct SubmitQuote<'info> {
         bump
     )]
     pub quote: Account<'info, Quote>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(host: String, host_hash: [u8; 32])]
+pub struct SubmitCatalogQuote<'info> {
+    #[account(mut)]
+    pub buyer: Signer<'info>,
+    #[account(has_one = buyer @ RfqError::NotBuyer)]
+    pub rfq: Account<'info, Rfq>,
+    /// CHECK: address-only PDA identifying a catalog seller by host; holds no data.
+    #[account(seeds = [b"catalog_seller", host_hash.as_ref()], bump)]
+    pub catalog_seller: UncheckedAccount<'info>,
+    #[account(
+        init,
+        payer = buyer,
+        space = 8 + Quote::INIT_SPACE,
+        seeds = [b"quote", rfq.key().as_ref(), catalog_seller.key().as_ref()],
+        bump
+    )]
+    pub quote: Account<'info, Quote>,
+    #[account(
+        init,
+        payer = buyer,
+        space = 8 + CatalogQuote::INIT_SPACE,
+        seeds = [b"catalog", quote.key().as_ref()],
+        bump
+    )]
+    pub catalog_quote: Account<'info, CatalogQuote>,
     pub system_program: Program<'info, System>,
 }
 
@@ -568,6 +689,17 @@ pub struct LatencyRecorded {
     pub met: bool,
 }
 
+#[event]
+pub struct CatalogQuoteRecorded {
+    pub rfq: Pubkey,
+    pub quote: Pubkey,
+    pub seller: Pubkey,
+    pub host: String,
+    pub pay_to: String,
+    pub network: String,
+    pub price: u64,
+}
+
 // ---------------------------------------------------------------- errors
 
 #[error_code]
@@ -610,4 +742,8 @@ pub enum RfqError {
     NotDelivered,
     #[msg("latency already recorded")]
     AlreadyMeasured,
+    #[msg("catalog host / pay_to / network empty or too long")]
+    BadCatalogField,
+    #[msg("host_hash is not sha256(host)")]
+    HostHashMismatch,
 }

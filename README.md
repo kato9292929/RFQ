@@ -50,8 +50,21 @@ log/                   追記専用の実行記録（deploy.md, YYYY-MM-DD.jsonl
 | `record_rejection(payment_sig, response_hash, reason_code)` | buyer | status == Awarded、quote == awarded_quote、reason_code ∈ 1..4 → Rejection PDA `["rejection", rfq]`、status = 5 Rejected |
 | `declare_sla(max_latency_ms)` | seller | quote の seller、status == Open、now < deadline → Sla PDA `["sla", quote]`（見積もりと同じ tx で送る） |
 | `record_latency(measured_latency_ms)` | buyer | status ∈ {Fulfilled, Rejected}、quote == awarded_quote、未記録 |
+| `submit_catalog_quote(host, host_hash, price, endpoint_hash, endpoint_uri, expires_at, pay_to, network)` | buyer | rfq の buyer、submit_quote と同じ条件、host_hash == sha256(host) → Quote（seller = PDA `["catalog_seller", sha256(host)]`）＋ CatalogQuote PDA `["catalog", quote]` |
 
-SLA と拒否は別 PDA に置いており、既存の Config / Rfq / Quote / Fulfillment のレイアウトは初版から変わっていません（アップグレード後も旧アカウントをそのまま読めます）。
+SLA・拒否・カタログ見積もりの印は別 PDA に置いており、既存の Config / Rfq / Quote / Fulfillment のレイアウトは初版から変わっていません（アップグレード後も旧アカウントをそのまま読めます）。
+
+**カタログ見積もり**: 売り手が RFQ の API を実装していなくても、x402 Endpoint のカタログに載っているエンドポイントなら市場に並べられます。
+買い手は仕様 JSON の `catalog_match`（`categories` / `networks` / `max_price_usdc` / `hosts`）に合うエンドポイントを最大 5 件選び、
+それぞれに GET を 1 回だけ送り（再送なし）、返ってきた 402 の `exact`・自ネットワーク・USDC の価格を `submit_catalog_quote` で代理記録します。
+402 が返らない、形式が読めない、上限を超える、などの場合は見積もりにせず、理由を `catalog_402` としてログに残します。
+売り手は署名していないので、価格は「その時点の 402 が示した値」です。記録した URL に GET すれば誰でも確かめられます。
+見積もりの出どころは `GET /quotes` の `source`（`seller` / `catalog`）で区別でき、カタログの売り手は `/sellers` でホスト単位に集計されます。
+採択から支払い、成立・拒否・`not_delivered` までの流れは通常の見積もりと同じです。支払い先は 402 が示した `pay_to` とネットワークです。
+
+**カタログ売り手への支払い上限**（コードで強制、`lib/catalog.ts`）: 1 コール $0.01、1 日 $0.50（UTC、追記専用ログの署名済み支払いを合計）。
+環境変数で下げることはできても、上げることはできません。支払い先は `CATALOG_PAY_HOSTS` のホストだけで、既定は自社の `osd.x402jp.com`・`jin.x402jp.com` です。
+カタログのエントリがサイトのトップページを指している場合は、`agents/buyer/catalog-paths.json` で実際の有料パスに置き換えます。
 
 **市場が保証するもの**: x402 は受領前に決済が終わる per-call 決済で、エスクローは置きません。したがって返金は保証しません。
 市場が持つのは「誰に約定し、納品がどうだったか（成立／理由付きの拒否、申告 SLA と実測応答時間）」の改ざんできない記録で、
@@ -131,7 +144,22 @@ feePayer は `CKPKJWNdJEqa81x7CkZ14BVPiY6y16Sxs7owznqtWYp5`。本実装は x402 
 売り手のレスポンスは公開リポジトリ [kato9292929/endpoint](https://github.com/kato9292929/endpoint) のデータを読み取り専用で集計した
 `agents/seller/data/catalog-snapshot.json`（生成元コミットを `source.commit` に記録）。`scripts/build-catalog-snapshot.mjs` で再生成でき、
 `e2e-devnet.sh` は実行前に浅いクローンから再生成します（`freshness_hours` を満たすため）。endpoint リポジトリには何も書き込みません。
+カタログ見積もりの候補は、同じリポジトリの `data/endpoints_full.json.gz`（全エンドポイント）を読み取り専用のクローンから読みます（`ENDPOINT_REPO_DIR`）。
+
+## mainnet
+
+市場のプログラムも支払いも Solana mainnet で動かします（devnet の記録はそのまま過去の実績として残します）。自社のデモ売り手 2 体は mainnet では使いません。
+鍵はリポジトリにもコンテナにも置かず、環境の secret（JSON のバイト配列）で渡します。スクリプトは実行中だけ `run/mainnet/keys/` に 0600 で書き出し、終了時に消します。
+
+```bash
+# デプロイ + Config（mainnet USDC、手数料 1%）。deployer に約 2.2 SOL（プログラムの rent ≈ 1.88 SOL）
+CONFIRM_MAINNET=yes MAINNET_RPC_URL=... MAINNET_DEPLOYER_KEYPAIR='[...]' bash scripts/deploy-mainnet.sh
+# カタログ見積もりで 1 ラウンド（買い手に USDC と、RFQ 1 本あたり約 0.01 SOL）
+CONFIRM_MAINNET=yes MAINNET_RPC_URL=... MAINNET_BUYER_KEYPAIR='[...]' bash scripts/catalog-mainnet.sh
+```
+
+`MAINNET_RPC_URL` は `getProgramAccounts` を許す RPC が必要です（公開の api.mainnet-beta は indexer の一覧取得に向きません）。
 
 ## やらないこと
 
-mainnet、既存リポジトリ（endpoint / data402 / aa / x402-Interlock）の変更、Circle Wallets / World ID / ERC-8004 統合、売り手への支払いのオンチェーンエスクロー。
+上限を超える支払い、第三者の売り手への再送・キャッシュ・負荷試験、既存リポジトリ（endpoint / seller-probe / aa / osd / jin / data402 / x402-Interlock）の変更、Circle Wallets / World ID / ERC-8004 統合、売り手への支払いのオンチェーンエスクロー。
