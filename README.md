@@ -151,20 +151,39 @@ feePayer は `CKPKJWNdJEqa81x7CkZ14BVPiY6y16Sxs7owznqtWYp5`。本実装は x402 
 市場のプログラムも支払いも Solana mainnet で動かします（devnet の記録はそのまま過去の実績として残します）。自社のデモ売り手 2 体は mainnet では使いません。
 鍵はリポジトリにもコンテナにも置かず、環境の secret（JSON のバイト配列）で渡します。公開アドレスは `docs/wallet.md`。スクリプトは実行中だけ `run/mainnet/keys/` に 0600 で書き出し、終了時に消します。
 
+公開は **2026年11月**（Agave 4.4 で rent 引き下げの最終段が入った後）。手順は [docs/mainnet-release.md](docs/mainnet-release.md)、費用は [docs/cost.md](docs/cost.md)。
+
+#### Secrets
+
+GitHub の Secrets ではなく、このリポジトリを動かすクラウド環境の**環境変数**として登録します（セッションのタイトルバーの環境メニュー → Edit → 環境変数）。登録後に始めた新しいセッションから読めます。秘密鍵やキーをチャットに貼らないでください。
+
+| 名前 | 形式 | 中身 |
+| --- | --- | --- |
+| `MAINNET_RPC_URL` | URL 1 行 | `getProgramAccounts` を許す mainnet RPC（例: `https://mainnet.helius-rpc.com/?api-key=<キー>`）。公開の api.mainnet-beta は indexer の一覧取得に使えない |
+| `MAINNET_DEPLOYER_KEYPAIR` | JSON のバイト配列 1 行（64 個の数、`[12,34,...]`） | deployer の秘密鍵。`npm run wallet:new` が表示したものをそのまま |
+| `MAINNET_BUYER_KEYPAIR` | 同上 | 買い手の秘密鍵。`npm run wallet:new` の2回目 |
+
+鍵は `npm run wallet:new` で作ります（自分の端末で実行。秘密鍵は1回だけ表示して保存しない。公開アドレスだけ `docs/wallet.md` に書く）。
+Claude のセッション内では実行を拒否します（出力が会話記録に残るため）。
+
 ```bash
-# デプロイ + Config（mainnet USDC、手数料 1%）。deployer に約 2.2 SOL（プログラムの rent ≈ 1.88 SOL）
+npx tsx scripts/rent-check.ts        # その日の rent を mainnet で計測（docs/cost.md と同じ表）
+# デプロイ + Config（mainnet USDC、手数料 1%）。事前に rent を測り、残高が rent + 0.3 SOL 未満なら止まる
 CONFIRM_MAINNET=yes MAINNET_RPC_URL=... MAINNET_DEPLOYER_KEYPAIR='[...]' bash scripts/deploy-mainnet.sh
-# カタログ見積もりで 1 ラウンド（買い手に USDC と、RFQ 1 本あたり約 0.01 SOL）
+# 最初の2回の購入（OSD /api/catalyst/NVDA 0.001 USDC、JIN /api/jin/series 0.01 USDC。固定）
 CONFIRM_MAINNET=yes MAINNET_RPC_URL=... MAINNET_BUYER_KEYPAIR='[...]' bash scripts/catalog-mainnet.sh
 ```
-
-`MAINNET_RPC_URL` は `getProgramAccounts` を許す RPC が必要です（公開の api.mainnet-beta は indexer の一覧取得に向きません）。
 
 ### Upgrade authority
 
 mainnet のプログラムは **immutable にしません**。upgrade authority は deployer に残し、不具合があれば同じプログラム ID のまま差し替えられるようにしています。
 authority の公開アドレスは、デプロイ時に `scripts/deploy-mainnet.sh` が `solana program show` で確認したうえで `log/deploy.md` に記録します（`docs/wallet.md` にも転記）。
-アドレスはデプロイ後に記入します（未デプロイ）。
+
+| 項目 | 値 |
+| --- | --- |
+| mainnet program id | （デプロイ後に記入） |
+| upgrade authority | （デプロイ後に記入。`docs/wallet.md` の deployer と同じになる） |
+| デプロイ tx | （デプロイ後に記入） |
 
 immutable にする条件（案。すべて満たしたら `solana program set-upgrade-authority --final` を実行し、その tx を `log/deploy.md` に記録する）:
 1. mainnet で 30 日以上、プログラムの差し替えなしに運用できている
