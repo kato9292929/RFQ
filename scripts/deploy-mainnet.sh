@@ -2,16 +2,22 @@
 # Deploy rfq_market to Solana MAINNET and create its Config (USDC mainnet mint, 1% fee).
 #   CONFIRM_MAINNET=yes MAINNET_RPC_URL=... MAINNET_DEPLOYER_KEYPAIR='[..64 bytes..]' \
 #   [MAINNET_PROGRAM_KEYPAIR='[...]'] [MAINNET_TREASURY_OWNER=<pubkey>] bash scripts/deploy-mainnet.sh
-# Needs ~2.2 SOL on the deployer (program rent ≈ 1.88 SOL + fees). Appends to log/deploy.md.
+# Before deploying it measures rent on MAINNET_RPC_URL (scripts/rent-check.ts) and stops unless the
+# deployer holds deploy rent + 0.3 SOL (docs/cost.md). Appends to log/deploy.md.
 cd "$(dirname "$0")/.."
 . scripts/mainnet-env.sh
 trap cleanup_keys EXIT
+# Planned release is November 2026, after Agave 4.4 brings the last SIMD-0437 rent steps (docs/cost.md).
+[ "$(date -u +%Y%m%d)" -ge 20261101 ] || [ "${ALLOW_BEFORE_NOVEMBER:-}" = yes ] \
+  || { echo "refusing: mainnet deploy is planned for November 2026 (set ALLOW_BEFORE_NOVEMBER=yes to override)"; exit 1; }
 DEPLOYER=$(write_key MAINNET_DEPLOYER_KEYPAIR deployer.json)
 if [ -n "${MAINNET_PROGRAM_KEYPAIR:-}" ]; then PROGRAM_KP=$(write_key MAINNET_PROGRAM_KEYPAIR program.json); else PROGRAM_KP=target/deploy/rfq_market-keypair.json; fi
 PROGRAM_ID=$(solana-keygen pubkey "$PROGRAM_KP")
 IDL_ID=$(node -pe 'require("./idl/rfq_market.json").address')
 [ "$PROGRAM_ID" = "$IDL_ID" ] || { echo "program keypair $PROGRAM_ID != IDL address $IDL_ID (set PROGRAM_ID and rebuild with that declare_id)"; exit 1; }
-echo "deployer $(solana-keygen pubkey "$DEPLOYER") balance $(solana -u "$RPC_URL" balance -k "$DEPLOYER")"
+# Rent at today's rate (SIMD-0437 lowers it in steps) and the balance check: exit 3 = too little SOL.
+RENT_RPC_URL="$RPC_URL" npx tsx scripts/rent-check.ts --balance "$(solana-keygen pubkey "$DEPLOYER")" --margin-sol 0.3 2>/dev/null \
+  || { echo "stopping before deploy (see docs/cost.md)"; exit 1; }
 # The deployer keeps the upgrade authority (no --final): the program can be replaced if a
 # bug shows up. See README "Upgrade authority" for when it would be made immutable.
 OUT=$(solana program deploy -u "$RPC_URL" -k "$DEPLOYER" --program-id "$PROGRAM_KP" --upgrade-authority "$DEPLOYER" \
