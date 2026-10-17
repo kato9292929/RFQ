@@ -164,7 +164,7 @@ GitHub の Secrets ではなく、このリポジトリを動かすクラウド�
 | `MAINNET_BUYER_KEYPAIR` | 同上 | 買い手の秘密鍵。`npm run wallet:new` の2回目 |
 
 鍵は `npm run wallet:new` で作ります（自分の端末で実行。秘密鍵は1回だけ表示して保存しない。公開アドレスだけ `docs/wallet.md` に書く）。
-Claude のセッション内では実行を拒否します（出力が会話記録に残るため）。
+Claude のセッション内では、秘密鍵を画面に出さずファイルに書く `npm run wallet:new -- <role> --secret-file <path>` だけ使えます（会話記録に鍵を残さないため）。
 
 ```bash
 npx tsx scripts/rent-check.ts        # その日の rent を mainnet で計測（docs/cost.md と同じ表）

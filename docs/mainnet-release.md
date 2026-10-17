@@ -15,7 +15,7 @@
 | deployer に SOL | その日の `rent-check.ts` の deploy total + 0.3 SOL（docs/cost.md） | — |
 | buyer に USDC $5 と SOL 0.01（今のレートのまま 2 回買うなら 0.02） | — | — |
 
-`wallet:new` は自分の端末で実行する（Claude のセッション内では拒否する）。秘密鍵は1回だけ表示され、保存されない。
+2026-10-17 に作成済み（deployer `GUFvTMto5VBoiCMPjwKDhMbmcV2N5XNAVNaSPJVakiH9`、buyer `5HMizijyhNXLBbngmzYZe5j5rfWe7oddJS7PLrgzU9hd`）。Claude のセッション内では `--secret-file` でファイルに書き、環境変数へ写したらファイルを消す。
 
 ## 1. Secrets の確認
 
