@@ -111,3 +111,15 @@ After the first upgrade (`4VMmTLd4…`, rejection + SLA). Mechanism behaving cor
 
 `/stats` after this (all 13 devnet RFQs): fulfilled 7, rejected 2 (schema_mismatch 1, not_delivered 1), cancelled 4, open/awarded 0;
 fees 0.003100 USDC. `/sellers`: seller1 fulfilled 3 / rejected 1 (schema_mismatch); seller2 fulfilled 4 / rejected 1 (not_delivered).
+
+## Upgrade 2026-10-17T14:21:37Z (devnet)
+
+Same program id `7XpxowqbuaEbQ3VkuQemFi7B3aMuat7eKtp5kydGvsVp`; existing Config/Rfq/Quote/Fulfillment layouts unchanged.
+Adds `record_rejection` (Rejection PDA ["rejection", rfq], rfq status 5 = Rejected), `declare_sla` / `record_latency` (Sla PDA ["sla", quote]).
+
+| item | value |
+|---|---|
+| programdata before / binary after | 334704 / 369456 bytes |
+| extend tx | `Extended Program Id 7XpxowqbuaEbQ3VkuQemFi7B3aMuat7eKtp5kydGvsVp by 35776 bytes` |
+| upgrade tx | `2jLRSsd1vENUoB9mZvWFKgDSFoKi3SGMXctuDGbcv4tkV9GWmw1vxqjiEvGfYNaeUn3cF4We1rScHZCrp1ZPzpjZ` |
+| git commit | `7961e5d` |
