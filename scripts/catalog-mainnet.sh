@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# One catalog-quote round on Solana MAINNET: refresh the x402 Endpoint snapshot (read-only
-# clone), start the indexer, post one RFQ with catalog_match, record catalog quotes from
-# the sellers' own 402 prices, award, pay once over x402, record the outcome.
+# The two first purchases on Solana MAINNET, fixed (no override): one RFQ each for
+#   OSD  https://osd.x402jp.com/api/catalyst/NVDA  (0.001 USDC)
+#   JIN  https://jin.x402jp.com/api/jin/series     (0.01 USDC)
+# Each round: refresh the x402 Endpoint snapshot (read-only clone), start the indexer, post one
+# RFQ with catalog_match, record the catalog quote from the seller's own 402 price, award, pay
+# once over x402, record the outcome. Then write the results to log/deploy.md by hand
+# (docs/mainnet-release.md step 5).
 #   CONFIRM_MAINNET=yes MAINNET_RPC_URL=... MAINNET_BUYER_KEYPAIR='[...]' bash scripts/catalog-mainnet.sh
-# Payment limits are enforced in code: $0.01 per call, $0.50 per day (lib/catalog.ts), and only
-# hosts in CATALOG_PAY_HOSTS (default: osd.x402jp.com, jin.x402jp.com) are paid.
+# Payment limits are enforced in code: $0.01 per call, $0.50 per day (lib/catalog.ts).
+# Third-party hosts come only after these two purchases, in a separate change.
 cd "$(dirname "$0")/.."
 . scripts/mainnet-env.sh
 export RUN_DIR=run/mainnet INDEXER_PORT=${INDEXER_PORT:-8787}
 export INDEXER_URL=http://127.0.0.1:$INDEXER_PORT INDEXER_PUBLIC_URL=http://127.0.0.1:$INDEXER_PORT
-# First purchases: OSD /api/catalyst/{ticker} (0.001) and JIN /api/jin/series (0.01), one RFQ
-# each (a single RFQ would only buy the cheaper one). Third-party hosts come after these two.
-SPECS=${SPECS:-"scenarios/catalog-osd.json scenarios/catalog-jin.json"}
+# One RFQ per host (a single RFQ would only buy the cheaper one); paths and hosts are pinned.
+SPECS="scenarios/catalog-osd.json scenarios/catalog-jin.json"
+export CATALOG_PATHS_FILE=scenarios/first-purchase-paths.json CATALOG_PAY_HOSTS=osd.x402jp.com,jin.x402jp.com
 PIDS=()
 cleanup() { for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done; cleanup_keys; }
 trap cleanup EXIT
