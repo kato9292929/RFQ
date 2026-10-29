@@ -146,6 +146,23 @@ feePayer は `CKPKJWNdJEqa81x7CkZ14BVPiY6y16Sxs7owznqtWYp5`。本実装は x402 
 `e2e-devnet.sh` は実行前に浅いクローンから再生成します（`freshness_hours` を満たすため）。endpoint リポジトリには何も書き込みません。
 カタログ見積もりの候補は、同じリポジトリの `data/endpoints_full.json.gz`（全エンドポイント）を読み取り専用のクローンから読みます（`ENDPOINT_REPO_DIR`）。
 
+## 記録は devnet・支払いは mainnet（2026-10-29〜）
+
+プログラムを mainnet に置く前（11月予定）に、実在のカタログ売り手から本物の USDC で買う構成。
+
+- 記録: RFQ・見積もり・採択・結果は devnet のプログラム（`7Xpx…GvsVp`）に書く。1% の手数料も devnet USDC
+- 支払い: 採択したカタログ売り手の 402 が示す network で払う
+  - Solana mainnet USDC: `MAINNET_BUYER_KEYPAIR`（RPC は `MAINNET_RPC_URL`）
+  - Base USDC: `MAINNET_BUYER_BASE_KEY`（EIP-3009。ガスは売り手側の facilitator 持ち。照合用 RPC は `BASE_RPC_URL`、既定は公開 RPC）
+  - どちらも `CONFIRM_MAINNET=yes` がないと読み込まない。上限は1コール $0.01・1日 $0.50（Solana と Base の合計）
+- 支払ってよい相手: 自社（OSD・JIN）＋ Seller Probe（probe.x402jp.com）の直近の有料測定が「納品」で、入力が不要なホスト。
+  それ以外（入力が必要／購入不成立／失敗／払ったのに届かない／送金なしで届いた／Probe が応答しない）は見積もりとして記録するだけで払わない（理由を run log に残す）
+- 支払いの network・支払元・レシート・取り直しの結果は、Fulfillment / Rejection を作る tx の memo に載せる（`lib/payment-net.ts`）。
+  支払元のアドレスは RFQ の仕様 JSON（ハッシュが devnet に載る）の `payers` に約束しておき、indexer はそれと 402 の payTo・見積もり額で送金を照合する
+- 取り直し（Delivery Receipt）: [docs/delivery-receipt.md](docs/delivery-receipt.md)
+- 一括実行: `CONFIRM_MAINNET=yes bash scripts/run-mixed.sh` → `log/run-YYYYMMDD.md`（`scripts/run-report.ts`）
+- テスト: `npm run test:catalog`、`npm run test:payment`、`bash scripts/test-cross-network.sh`（記録はローカル、支払いは devnet）、`bash scripts/catalog-devnet.sh`（devnet の模擬売り手で 回収・成立・未納品）
+
 ## mainnet
 
 市場のプログラムも支払いも Solana mainnet で動かします（devnet の記録はそのまま過去の実績として残します）。自社のデモ売り手 2 体は mainnet では使いません。

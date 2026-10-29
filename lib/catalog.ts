@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { ROOT } from "./common.js";
+import { BASE_MAINNET_CAIP2, SOLANA_MAINNET_CAIP2, USDC_BY_NETWORK } from "./payment-net.js";
 
 export type CatalogEntry = { url: string; category?: string; networks?: string[]; price?: { amount?: number } | null };
 export type CatalogMatch = {
@@ -11,6 +12,7 @@ export type CatalogMatch = {
   networks?: string[]; // catalog chain names, e.g. "Solana"
   max_price_usdc?: number;
   hosts?: string[];
+  urls?: string[]; // ask exactly these URLs (e.g. the path the Probe paid for), skipping the catalog lookup
 };
 
 /** Hard caps for paying catalog sellers. Env can lower them, never raise them. */
@@ -26,12 +28,29 @@ export const maxPerCall = () => lowerOnly("CATALOG_MAX_PER_CALL", HARD_MAX_PER_C
 export const maxPerDay = () => lowerOnly("CATALOG_MAX_PER_DAY", HARD_MAX_PER_DAY);
 export const MAX_CATALOG_ENDPOINTS = 5;
 
-/** Hosts the buyer may pay through catalog quotes (first week: our own OSD and JIN only). */
-export function payHosts(): string[] {
-  return (process.env.CATALOG_PAY_HOSTS ?? "osd.x402jp.com,jin.x402jp.com")
+/** Our own sellers (OSD, JIN). CATALOG_PAY_HOSTS replaces this base list (tests use 127.0.0.1). */
+export const OWN_HOSTS = ["osd.x402jp.com", "jin.x402jp.com"];
+const baseHosts = () =>
+  (process.env.CATALOG_PAY_HOSTS ?? OWN_HOSTS.join(","))
     .split(",")
     .map((h) => h.trim().toLowerCase())
     .filter(Boolean);
+
+/**
+ * Hosts the buyer may pay through catalog quotes: the base list (our own) plus hosts whose
+ * latest paid measurement by x402 Seller Probe was `delivered`. Pass null when the Probe did
+ * not answer: then only the base list.
+ */
+export function payHosts(probeDelivered: string[] | null = null): string[] {
+  return [...new Set([...baseHosts(), ...(probeDelivered ?? [])])];
+}
+
+/**
+ * Hosts a not_delivered payment may be re-requested from with the same payment header:
+ * our own sellers and local test sellers only. Never a third party.
+ */
+export function retryAllowed(host: string): boolean {
+  return [...OWN_HOSTS, "127.0.0.1", "localhost"].includes(host.toLowerCase());
 }
 
 export function hostOf(url: string): string | null {
@@ -71,6 +90,7 @@ export function selectCatalogUrls(entries: CatalogEntry[], m: CatalogMatch, over
   const hosts = (m.hosts ?? payHosts()).map((h) => h.toLowerCase());
   const urls: string[] = [];
   const seen = new Set<string>();
+  if (m.urls?.length) return m.urls.filter((u) => { const h = hostOf(u); return !!h && hosts.includes(h); }).slice(0, MAX_CATALOG_ENDPOINTS);
   for (const e of entries) {
     const host = hostOf(e.url);
     if (!host || !hosts.includes(host)) continue;
@@ -112,29 +132,39 @@ export async function fetch402(url: string, timeoutMs = 10_000): Promise<{ ok: t
   return { ok: false, reason: "402 without a readable accepts list" };
 }
 
-/** The exact/USDC option on our network, priced at or under the cap. */
-export function pickAccept(
-  accepts: Accept[], network: string, asset: string, max: bigint,
-): { ok: true; amount: bigint; payTo: string; network: string } | { ok: false; reason: string } {
+export type Picked = { ok: true; amount: bigint; payTo: string; network: string; payable: boolean } | { ok: false; reason: string };
+
+/**
+ * The exact/USDC option priced at or under the cap. Prefers a network this buyer can pay on;
+ * otherwise returns a recognised USDC option elsewhere (e.g. Base) with payable=false, which is
+ * recorded as a quote but never paid.
+ */
+export function pickAccept(accepts: Accept[], payable: string[], max: bigint): Picked {
   const exact = accepts.filter((a) => a.scheme === "exact");
   if (!exact.length) return { ok: false, reason: "no exact scheme offered" };
-  const onNet = exact.filter((a) => a.network === network);
-  if (!onNet.length) return { ok: false, reason: `not offered on ${network} (offered: ${[...new Set(exact.map((a) => a.network))].join(", ")})` };
-  const usdc = onNet.filter((a) => a.asset === asset);
-  if (!usdc.length) return { ok: false, reason: `not priced in ${asset}` };
-  const a = usdc[0];
-  const raw = a.amount ?? a.maxAmountRequired;
-  if (!raw || !/^\d+$/.test(raw)) return { ok: false, reason: `malformed amount ${raw}` };
-  const amount = BigInt(raw);
-  if (amount <= 0n) return { ok: false, reason: "amount is 0" };
-  if (amount > max) return { ok: false, reason: `price ${amount} > cap ${max}` };
-  if (!a.payTo) return { ok: false, reason: "no payTo" };
-  return { ok: true, amount, payTo: a.payTo, network: a.network };
+  const usdc = exact.filter((a) => USDC_BY_NETWORK[a.network] !== undefined && a.asset?.toLowerCase() === USDC_BY_NETWORK[a.network].toLowerCase());
+  if (!usdc.length) return { ok: false, reason: `no USDC option on a known network (offered: ${[...new Set(exact.map((a) => a.network))].join(", ")})` };
+  const problems: string[] = [];
+  const ok: Extract<Picked, { ok: true }>[] = [];
+  for (const a of usdc) {
+    const raw = a.amount ?? a.maxAmountRequired;
+    if (!raw || !/^\d+$/.test(raw)) { problems.push(`malformed amount ${raw}`); continue; }
+    const amount = BigInt(raw);
+    if (amount <= 0n) { problems.push("amount is 0"); continue; }
+    if (amount > max) { problems.push(`price ${amount} > cap ${max}`); continue; }
+    if (!a.payTo) { problems.push("no payTo"); continue; }
+    ok.push({ ok: true, amount, payTo: a.payTo, network: a.network, payable: payable.includes(a.network) });
+  }
+  if (!ok.length) return { ok: false, reason: [...new Set(problems)].join("; ") };
+  ok.sort((x, y) => Number(y.payable) - Number(x.payable) || payable.indexOf(x.network) - payable.indexOf(y.network) || (x.amount < y.amount ? -1 : 1));
+  return ok[0];
 }
 
 /**
  * Catalog spend so far today (UTC), from the append-only run log. Counts every
- * payment the buyer signed (`x402_payment_sent`), delivered or not.
+ * payment the buyer signed (`x402_payment_sent`), delivered or not, Solana and Base together.
+ * Test-network payments (devnet mock seller) are real-money-free and not counted; a record
+ * without a network (older logs) is counted.
  */
 export function catalogSpentToday(): bigint {
   const dir = resolve(ROOT, process.env.LOG_DIR ?? "log");
@@ -146,7 +176,8 @@ export function catalogSpentToday(): bigint {
     if (!line) continue;
     try {
       const r = JSON.parse(line);
-      if (r.step === "x402_payment_sent" && r.source === "catalog" && /^\d+$/.test(String(r.amount))) sum += BigInt(r.amount);
+      const real = !r.network || r.network === SOLANA_MAINNET_CAIP2 || r.network === BASE_MAINNET_CAIP2;
+      if (r.step === "x402_payment_sent" && r.source === "catalog" && real && /^\d+$/.test(String(r.amount))) sum += BigInt(r.amount);
     } catch {
       /* skip malformed line */
     }

@@ -4,8 +4,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
-import { ROOT, STATUS, connection, env, fmtUsdc, pdas, program, reasonByCode, retry, sha256 } from "../../lib/common.js";
+import { ROOT, STATUS, X402_NETWORK, connection, env, fmtUsdc, pdas, program, reasonByCode, retry, sha256 } from "../../lib/common.js";
 import { probeHost } from "../../lib/probe.js";
+import {
+  MEMO_PROGRAM_ID, SOLANA_MAINNET_CAIP2, USDC_BY_NETWORK, baseRpcUrl, checkUsdcTransfer, decodePaymentRef, isEvm, parseRecordMemo, verifyConnection,
+  type RecordMemo,
+} from "../../lib/payment-net.js";
+import { checkEvmTransfer } from "../../lib/evm-pay.js";
 
 const PORT = Number(env("INDEXER_PORT", "8787"));
 const PUBLIC_URL = env("INDEXER_PUBLIC_URL", `http://127.0.0.1:${PORT}`);
@@ -101,7 +106,49 @@ function quoteJson(pk: PublicKey, q: QuoteAcc, slas?: Map<string, ReturnType<typ
     // seller's own 402 advertised (x402 Endpoint catalog); the seller never signed.
     source: catalog ? "catalog" : "seller",
     catalog,
+    // Network the seller is paid on (records are always on this program's cluster).
+    pay_network: catalog?.network ?? X402_NETWORK(),
   };
+}
+
+/** The spec an RFQ committed to (by hash): local store first, then its spec_uri. */
+const specCache = new Map<string, any>();
+async function specOf(rfq: RfqAcc): Promise<any | null> {
+  const h = hex(rfq.specHash);
+  if (specCache.has(h)) return specCache.get(h);
+  let bytes: Buffer | null = null;
+  const p = resolve(SPEC_DIR, `${h}.json`);
+  if (existsSync(p)) bytes = readFileSync(p);
+  else {
+    try {
+      const r = await fetch(rfq.specUri, { signal: AbortSignal.timeout(5000) });
+      if (r.ok) bytes = Buffer.from(await r.arrayBuffer());
+    } catch {
+      /* unavailable */
+    }
+  }
+  const spec = bytes && sha256(bytes).toString("hex") === h ? JSON.parse(bytes.toString("utf8")) : null;
+  if (spec) specCache.set(h, spec);
+  return spec;
+}
+
+/** Our memo on the transaction that created a fulfillment/rejection account (see lib/payment-net.ts). */
+const memoCache = new Map<string, { memo: RecordMemo | null; tx: string | null }>();
+async function recordMemo(pda: PublicKey): Promise<{ memo: RecordMemo | null; tx: string | null }> {
+  const k = pda.toBase58();
+  if (memoCache.has(k)) return memoCache.get(k)!;
+  const sigs = await retry(() => conn.getSignaturesForAddress(pda, { limit: 20 }, "confirmed"), "getSignaturesForAddress");
+  const oldest = sigs[sigs.length - 1]?.signature ?? null;
+  let memo: RecordMemo | null = null;
+  if (oldest) {
+    const tx = await retry(() => conn.getParsedTransaction(oldest, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }), "getParsedTransaction");
+    for (const ix of tx?.transaction.message.instructions ?? []) {
+      if (ix.programId.equals(MEMO_PROGRAM_ID) && "parsed" in ix && typeof ix.parsed === "string") memo = parseRecordMemo(ix.parsed) ?? memo;
+    }
+  }
+  const out = { memo, tx: oldest };
+  memoCache.set(k, out);
+  return out;
 }
 
 const rfqFilter = (rfq: PublicKey) => [{ memcmp: { offset: 8, bytes: rfq.toBase58() } }];
@@ -115,7 +162,8 @@ const verifyCache = new Map<string, Verification>();
  * Check that the x402 payment tx actually moved `quote.price` of the configured
  * USDC mint from the RFQ buyer to the quoting seller, and succeeded.
  */
-async function verifyPayment(sigB58: string, rfq: RfqAcc, quote: QuoteAcc, usdcMint: string, catalog?: CatalogInfo): Promise<Verification> {
+async function verifyPayment(sigB58: string | null, rfq: RfqAcc, quote: QuoteAcc, usdcMint: string, catalog?: CatalogInfo): Promise<Verification> {
+  if (!sigB58) return { verified: false, reason: "no payment tx recorded (delivered without settlement)", checked_at: now() };
   const cached = verifyCache.get(sigB58);
   if (cached?.verified) return cached;
   const done = (verified: boolean, reason: string, details?: Record<string, unknown>) => {
@@ -123,35 +171,31 @@ async function verifyPayment(sigB58: string, rfq: RfqAcc, quote: QuoteAcc, usdcM
     verifyCache.set(sigB58, v);
     return v;
   };
-  const tx = await retry(() => conn.getParsedTransaction(sigB58, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }), "getParsedTransaction");
-  if (!tx) return done(false, "transaction not found");
-  if (tx.meta?.err) return done(false, `transaction failed: ${JSON.stringify(tx.meta.err)}`);
-  const pre = tx.meta?.preTokenBalances ?? [];
-  const post = tx.meta?.postTokenBalances ?? [];
-  const delta = (owner: string) => {
-    const amt = (arr: typeof pre) =>
-      arr.filter((b) => b.mint === usdcMint && b.owner === owner).reduce((s, b) => s + BigInt(b.uiTokenAmount.amount), 0n);
-    return amt(post) - amt(pre);
-  };
+  // The payment happened on the network the catalog quote names (records stay on this cluster).
+  const network = catalog?.network ?? X402_NETWORK();
+  const own = network === X402_NETWORK();
+  const payConn = isEvm(network) ? null : verifyConnection(network, conn);
+  if (!payConn && !isEvm(network)) return done(false, `no RPC configured for payment network ${network}`, { network });
+  const mint = own ? usdcMint : USDC_BY_NETWORK[network];
+  // Sender: the record buyer on this cluster; on another network, the address the RFQ's spec
+  // (hashed on-chain) committed as payer for that network.
+  let buyer = rfq.buyer.toBase58();
+  if (!own) {
+    const spec = await specOf(rfq);
+    const committed = spec?.payers?.[network];
+    if (typeof committed !== "string") return done(false, `spec does not commit a payer for ${network}`, { network });
+    buyer = committed;
+  }
   // A catalog seller is paid at the address its 402 advertised, not at the per-host PDA.
   const seller = catalog?.pay_to ?? quote.seller.toBase58();
-  const buyer = rfq.buyer.toBase58();
-  const sellerDelta = delta(seller);
-  const buyerDelta = delta(buyer);
-  const price = BigInt(quote.price.toString());
-  const details = {
-    mint: usdcMint,
-    seller,
-    buyer,
-    expected_amount: price.toString(),
-    seller_received: sellerDelta.toString(),
-    buyer_sent: (-buyerDelta).toString(),
-    slot: tx.slot,
-    block_time: tx.blockTime,
-  };
-  if (sellerDelta !== price) return done(false, "seller USDC delta does not equal quote.price", details);
-  if (-buyerDelta !== price) return done(false, "buyer USDC delta does not equal quote.price", details);
-  return done(true, "USDC transfer buyer→seller of quote.price confirmed", details);
+  const amount = BigInt(quote.price.toString());
+  const r = await retry(
+    () => (payConn
+      ? checkUsdcTransfer(payConn, sigB58, { mint, buyer, seller, amount, network })
+      : checkEvmTransfer(baseRpcUrl(), sigB58, { usdc: mint, buyer, seller, amount, network })),
+    "checkTransfer",
+  );
+  return done(r.ok, r.reason, r.details);
 }
 
 // ---- HTTP ------------------------------------------------------------------
@@ -242,17 +286,25 @@ app.get(
     const quotes = await retry(() => prog.account.quote.all(filters), "quote.all");
     const slas = await slaByQuote();
     const catalogs = await catalogByQuote();
-    let out = quotes.map((q) => quoteJson(q.publicKey, q.account, slas, catalogs));
+    const recovered = await recoveredRfqs();
+    const rfqs = new Map((await retry(() => prog.account.rfq.all(), "rfq.all")).map((r) => [r.publicKey.toBase58(), r.account]));
+    let out = quotes.map((q) => {
+      const awarded = rfqs.get(q.account.rfq.toBase58())?.awardedQuote?.equals(q.publicKey) ?? false;
+      // recovered: 1 when this quote was awarded and its paid delivery was recovered by a re-request
+      return { ...quoteJson(q.publicKey, q.account, slas, catalogs), awarded, recovered: awarded && recovered.has(q.account.rfq.toBase58()) ? 1 : 0 };
+    });
     const source = req.query.source as string | undefined;
     if (source) out = out.filter((q) => q.source === source);
+    const payNet = req.query.pay_network as string | undefined;
+    if (payNet) out = out.filter((q) => q.pay_network === payNet);
     res.json(out.sort((a, b) => b.created_at - a.created_at));
   }),
 );
 
 async function fulfillmentJson(pk: PublicKey, f: FulfillmentAcc, usdcMint: string) {
-  const sig = bs58.encode(Buffer.from(f.paymentSig));
   const [rfq, quote] = await Promise.all([retry(() => prog.account.rfq.fetch(f.rfq), "rfq.fetch"), retry(() => prog.account.quote.fetch(f.quote), "quote.fetch")]);
   const catalog = await catalogFor(f.quote);
+  const sig = decodePaymentRef(catalog?.network ?? X402_NETWORK(), f.paymentSig);
   let v: Verification;
   try {
     v = await verifyPayment(sig, rfq, quote, usdcMint, catalog);
@@ -269,11 +321,53 @@ async function fulfillmentJson(pk: PublicKey, f: FulfillmentAcc, usdcMint: strin
     price_usdc: fmtUsdc(quote.price.toString()),
     endpoint_uri: quote.endpointUri,
     payment_sig: sig,
+    payment_ref_b58: bs58.encode(Buffer.from(f.paymentSig)),
     response_hash: hex(f.responseHash),
     fulfilled_at: f.fulfilledAt.toNumber(),
+    ...(await recordExtras(pk, catalog)),
     verified: v.verified,
     verification: v,
   };
+}
+
+/** Payment network, payer, receipt and recovery for a fulfillment/rejection (from its memo). */
+async function recordExtras(pk: PublicKey, catalog?: CatalogInfo) {
+  const { memo, tx } = await recordMemo(pk).catch(() => ({ memo: null, tx: null }));
+  const network = catalog?.network ?? X402_NETWORK();
+  return {
+    source: catalog ? "catalog" : "seller",
+    host: catalog?.host ?? null,
+    payment_network: network,
+    // "mainnet": paid in mainnet USDC (Solana or Base); "record_cluster": paid on the cluster the records are on.
+    payment_kind: network === X402_NETWORK() ? "record_cluster" : network === SOLANA_MAINNET_CAIP2 || network === "eip155:8453" ? "mainnet" : "other",
+    // fulfilled | recovered | delivered_without_settlement (fulfillments); rejections carry `reason`
+    outcome: memo?.outcome ?? (memo?.recovered ? "recovered" : null),
+    payer: memo?.payer ?? null,
+    receipt: memo?.receipt ?? null,
+    receipt_signer: memo?.receipt_signer ?? null,
+    recovered: memo?.recovered === true,
+    rerequest: memo?.retry ?? null,
+    first_status: memo?.first_status ?? null,
+    record_tx: tx,
+  };
+}
+
+/** Fulfilled RFQs that were recovered by a re-request, keyed by rfq pubkey. */
+async function recoveredRfqs(): Promise<Set<string>> {
+  return (await fulfillmentKinds()).recovered;
+}
+
+/** Fulfillment records by memo: recovered by a re-request / delivered without a settled payment. */
+async function fulfillmentKinds(): Promise<{ recovered: Set<string>; withoutSettlement: Set<string> }> {
+  const all = await retry(() => prog.account.fulfillment.all(), "fulfillment.all");
+  const recovered = new Set<string>();
+  const withoutSettlement = new Set<string>();
+  for (const f of all) {
+    const m = (await recordMemo(f.publicKey).catch(() => ({ memo: null }))).memo;
+    if (m?.recovered) recovered.add(f.account.rfq.toBase58());
+    if (m?.outcome === "delivered_without_settlement") withoutSettlement.add(f.account.rfq.toBase58());
+  }
+  return { recovered, withoutSettlement };
 }
 
 /** How many fulfillment/rejection records cite each payment tx (one payment must back one record). */
@@ -284,14 +378,15 @@ async function paymentUseCounts(): Promise<Map<string, number>> {
   ]);
   const m = new Map<string, number>();
   for (const x of [...fs, ...rs]) {
+    if (x.account.paymentSig.every((b: number) => b === 0)) continue; // no payment landed
     const k = bs58.encode(Buffer.from(x.account.paymentSig));
     m.set(k, (m.get(k) ?? 0) + 1);
   }
   return m;
 }
 
-function reuseGuard<T extends { payment_sig: string; verified: boolean; verification: Verification }>(rec: T, uses: Map<string, number>): T {
-  const n = uses.get(rec.payment_sig) ?? 0;
+function reuseGuard<T extends { payment_sig: string | null; payment_ref_b58: string; verified: boolean; verification: Verification }>(rec: T, uses: Map<string, number>): T {
+  const n = uses.get(rec.payment_ref_b58) ?? 0;
   if (n > 1) return { ...rec, verified: false, verification: { ...rec.verification, verified: false, reason: `payment tx is cited by ${n} records` } };
   return rec;
 }
@@ -313,12 +408,12 @@ app.get(
 );
 
 async function rejectionJson(pk: PublicKey, r: RejectionAcc, usdcMint: string) {
-  const sig = bs58.encode(Buffer.from(r.paymentSig));
   const [rfq, quote] = await Promise.all([
     retry(() => prog.account.rfq.fetch(r.rfq), "rfq.fetch"),
     retry(() => prog.account.quote.fetch(r.quote), "quote.fetch"),
   ]);
   const catalog = await catalogFor(r.quote);
+  const sig = decodePaymentRef(catalog?.network ?? X402_NETWORK(), r.paymentSig);
   let v: Verification;
   try {
     v = await verifyPayment(sig, rfq, quote, usdcMint, catalog);
@@ -334,10 +429,12 @@ async function rejectionJson(pk: PublicKey, r: RejectionAcc, usdcMint: string) {
     price: quote.price.toString(),
     price_usdc: fmtUsdc(quote.price.toString()),
     payment_sig: sig,
+    payment_ref_b58: bs58.encode(Buffer.from(r.paymentSig)),
     response_hash: hex(r.responseHash),
     reason_code: r.reasonCode,
     reason: reasonByCode(r.reasonCode),
     rejected_at: r.rejectedAt.toNumber(),
+    ...(await recordExtras(pk, catalog)),
     // verified = the buyer really paid the seller (rejections are paid deliveries; no refund).
     verified: v.verified,
     verification: v,
@@ -364,6 +461,7 @@ app.get(
     const slas = await slaByQuote();
     const catalogs = await catalogByQuote();
     const rfqByPk = new Map(rfqs.map((r) => [r.publicKey.toBase58(), r.account]));
+    const { recovered, withoutSettlement } = await fulfillmentKinds();
     const rows = new Map<string, any>();
     for (const q of quotes) {
       const seller = q.account.seller.toBase58();
@@ -371,9 +469,11 @@ app.get(
       // Catalog sellers are keyed by a per-host PDA, so one row per host.
       const row = rows.get(seller) ?? {
         seller, source: cat ? "catalog" : "seller", host: cat?.host ?? null, pay_to: [] as string[], quotes: 0, awarded: 0, fulfilled: 0, rejected: 0, rejected_by_reason: {} as Record<string, number>,
-        sla_declared: 0, sla_measured: 0, sla_met: 0, endpoint_hosts: [] as string[],
+        sla_declared: 0, sla_measured: 0, sla_met: 0, endpoint_hosts: [] as string[], pay_networks: [] as string[], recovered: 0, delivered_without_settlement: 0,
       };
       row.quotes++;
+      const payNet = cat?.network ?? X402_NETWORK();
+      if (!row.pay_networks.includes(payNet)) row.pay_networks.push(payNet);
       if (cat && !row.pay_to.includes(cat.pay_to)) row.pay_to.push(cat.pay_to);
       // Hosts this seller quoted endpoints on (same key as x402 Seller Probe), so the
       // track record can be joined to Probe scores by host.
@@ -382,7 +482,11 @@ app.get(
       const r = rfqByPk.get(q.account.rfq.toBase58());
       if (r?.awardedQuote?.equals(q.publicKey)) {
         row.awarded++;
-        if (STATUS[r.status] === "fulfilled") row.fulfilled++;
+        // 送金なしで届いた is not a completed trade: counted apart, never as fulfilled.
+        const k = q.account.rfq.toBase58();
+        if (STATUS[r.status] === "fulfilled" && withoutSettlement.has(k)) row.delivered_without_settlement++;
+        else if (STATUS[r.status] === "fulfilled") row.fulfilled++;
+        if (STATUS[r.status] === "fulfilled" && recovered.has(k)) row.recovered++;
         if (STATUS[r.status] === "rejected") row.rejected++;
       }
       const sla = slas.get(q.publicKey.toBase58());

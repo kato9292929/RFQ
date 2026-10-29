@@ -133,6 +133,8 @@
   /* which network a block of records comes from */
   .net-label { display:inline-block; margin-bottom:14px; padding:3px 10px; border:1px solid rgba(255,255,255,.45); border-radius:999px; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#d6d6d6 }
   .net-label[data-network="mainnet"] { border-color:transparent; color:#000; background:linear-gradient(110deg,#b6df8c,#ecd27c,#efe3d4,#ebc9da,#c6b4ee) }
+  .net-label + .net-label { margin-left:8px }
+  .rec-group + .rec-group { margin-top:clamp(56px,9vh,96px) }
   .facts { margin-top:36px; padding:20px 22px; border:1px solid rgba(255,255,255,.18); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:14px; line-height:1.8; color:#d6d6d6; overflow-x:auto; max-width:100% }
   .links { list-style:none; display:flex; flex-wrap:wrap; gap:12px 28px; margin-top:24px; font-size:15px }
 
@@ -273,7 +275,17 @@
   </section>
 
   <section class="sec" id="records">
-    <span class="net-label" data-network="devnet">devnet</span>
+    <!-- Two groups that never mix: records whose payment moved real USDC on mainnet, and records
+         that stayed on devnet end to end (our own agents, mock catalog seller). The "catalog"
+         label is added to the mainnet group once its first real catalog purchase is recorded. -->
+    <div class="rec-group" id="records-mainnet">
+      <span class="net-label" data-network="mainnet">mainnet payments</span>
+      <h2 class="sec-title">Paid in mainnet USDC</h2>
+      <p class="lead">Requests, quotes and outcomes are recorded on devnet; the seller is paid in real USDC on Solana or Base, at the address its own 402 names.</p>
+      <p class="asof">No mainnet-paid records yet.</p>
+    </div>
+    <div class="rec-group" id="records-devnet">
+    <span class="net-label" data-network="devnet">devnet only</span>
     <h2 class="sec-title">Devnet so far</h2>
     <div class="tiles">
       <div class="tile"><span class="tile-no">13</span><span class="tile-label">requests</span></div>
@@ -292,6 +304,7 @@ Fee          1% of the winning price, paid by the buyer</pre>
       <li><a href="https://explorer.solana.com/tx/5AqbP6PsPW827MK9ZioWPkaj1ptBsQ4mzXidNMZimbpzWuW2jM1v6eUx1PRcW5472BNSrqMjz6ebZrLLP6YmmrXR?cluster=devnet" target="_blank" rel="noopener">A completed payment</a></li>
       <li><a href="https://github.com/kato9292929/RFQ/tree/main/log" target="_blank" rel="noopener">Full run log</a></li>
     </ul>
+    </div>
   </section>
 
   <section class="sec" id="next">

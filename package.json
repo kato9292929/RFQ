@@ -12,6 +12,7 @@
     "init-config": "tsx scripts/init-config.ts",
     "typecheck": "tsc --noEmit",
     "test:catalog": "tsx test/catalog-unit.ts",
+    "test:payment": "tsx test/payment-net-unit.ts",
     "wallet:new": "tsx scripts/wallet-new.ts",
     "rent:check": "tsx scripts/rent-check.ts"
   },
@@ -21,13 +22,15 @@
     "@solana/spl-token": "^0.4.15",
     "@solana/web3.js": "^1.99.0",
     "@x402/core": "^2.28.0",
+    "@x402/evm": "^2.28.0",
     "@x402/express": "^2.28.0",
     "@x402/fetch": "^2.28.0",
     "@x402/svm": "^2.28.0",
     "ajv": "^8.20.0",
     "bs58": "^6.0.0",
     "dotenv": "^18.0.7",
-    "express": "^5.3.0"
+    "express": "^5.3.0",
+    "viem": "^2.57.4"
   },
   "devDependencies": {
     "@types/chai": "^5.2.3",
