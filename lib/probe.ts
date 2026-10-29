@@ -60,11 +60,12 @@ export function applyProbeFilter<Q extends { pubkey: string; seller: string }>(
     if (!l || l.status === "unavailable") {
       unavailable.push({ quote: q.pubkey, host: l?.host ?? null, error: l && l.status === "unavailable" ? l.error : "no lookup" });
       kept.push(q);
-    } else if (l.status === "unscored") {
+    } else if (l.status === "unscored" || l.score === null) {
+      // No number from the Probe (not measured, or measured without a score): not "below" min.
       unscored.push({ quote: q.pubkey, host: l.host });
       kept.push(q);
-    } else if (l.score === null || l.score < min) {
-      excluded.push({ quote: q.pubkey, seller: q.seller, why: `probe_score ${l.score ?? "null"} (${l.coverage}) < min_probe_score=${min} for ${l.host}` });
+    } else if (l.score < min) {
+      excluded.push({ quote: q.pubkey, seller: q.seller, why: `probe_score ${l.score} (${l.coverage}) < min_probe_score=${min} for ${l.host}` });
     } else kept.push(q);
   }
   return { kept, excluded, unscored, unavailable };
