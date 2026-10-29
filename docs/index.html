@@ -134,6 +134,7 @@
   .net-label { display:inline-block; margin-bottom:14px; padding:3px 10px; border:1px solid rgba(255,255,255,.45); border-radius:999px; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#d6d6d6 }
   .net-label[data-network="mainnet"] { border-color:transparent; color:#000; background:linear-gradient(110deg,#b6df8c,#ecd27c,#efe3d4,#ebc9da,#c6b4ee) }
   .net-label + .net-label { margin-left:8px }
+  .net-label[data-network="catalog"] { border-color:#b6df8c; color:#b6df8c }
   .rec-group + .rec-group { margin-top:clamp(56px,9vh,96px) }
   .facts { margin-top:36px; padding:20px 22px; border:1px solid rgba(255,255,255,.18); border-radius:8px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:14px; line-height:1.8; color:#d6d6d6; overflow-x:auto; max-width:100% }
   .links { list-style:none; display:flex; flex-wrap:wrap; gap:12px 28px; margin-top:24px; font-size:15px }
@@ -279,10 +280,23 @@
          that stayed on devnet end to end (our own agents, mock catalog seller). The "catalog"
          label is added to the mainnet group once its first real catalog purchase is recorded. -->
     <div class="rec-group" id="records-mainnet">
-      <span class="net-label" data-network="mainnet">mainnet payments</span>
+      <span class="net-label" data-network="mainnet">mainnet payments</span><span class="net-label" data-network="catalog">catalog</span>
       <h2 class="sec-title">Paid in mainnet USDC</h2>
       <p class="lead">Requests, quotes and outcomes are recorded on devnet; the seller is paid in real USDC on Solana or Base, at the address its own 402 names.</p>
-      <p class="asof">No mainnet-paid records yet.</p>
+      <div class="tiles">
+        <div class="tile"><span class="tile-no">44</span><span class="tile-label">requests</span></div>
+        <div class="tile"><span class="tile-no">42</span><span class="tile-label">delivered</span></div>
+        <div class="tile"><span class="tile-no">42</span><span class="tile-label">sellers</span></div>
+        <div class="tile"><span class="tile-no">2</span><span class="tile-label">not completed</span></div>
+        <div class="tile"><span class="tile-no">42</span><span class="tile-label">payments checked on-chain</span></div>
+      </div>
+      <p class="asof">As of Oct 29, 2026 (JST)</p>
+      <p class="note">One batch: our own OSD and JIN, plus every third-party seller that x402 Seller Probe had seen deliver after payment. Each was asked for a quote through its catalog listing and paid once, at most $0.01. 0.123 USDC in total: 18 payments on Solana, 24 on Base. Two did not complete: one refused the payment (nothing was charged), one no longer answered with a 402.</p>
+      <ul class="links">
+        <li><a href="https://basescan.org/tx/0xcb6d7d3ec40a833e8ca7e1f1f0b1174b5d8de4eee0a79559ed58bc74eee42c8a" target="_blank" rel="noopener">A Base payment</a></li>
+        <li><a href="https://explorer.solana.com/tx/2enCL5FTMFjwrHHkvrJ7EKDJJFR4MgAbXvbuUfTwySYD6fYzQFZkn4VchcnFzhqQTYaQHQp7TXnpMRWzxj9rBgg" target="_blank" rel="noopener">A Solana payment</a></li>
+        <li><a href="https://github.com/kato9292929/RFQ/blob/main/log/run-20261029.md" target="_blank" rel="noopener">Every request in this batch</a></li>
+      </ul>
     </div>
     <div class="rec-group" id="records-devnet">
     <span class="net-label" data-network="devnet">devnet only</span>

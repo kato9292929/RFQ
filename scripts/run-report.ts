@@ -61,7 +61,8 @@ for (const [scenario, rs] of byScenario) {
   if (round?.deferred) outcome = `deferred (${round.deferred})`;
   else if (ful) outcome = ful.outcome ?? (ful.recovered ? "recovered" : "fulfilled");
   else if (rej) outcome = rej.reason === "not_delivered" ? "not_delivered" : `rejected (${rej.reason})`;
-  else if (cancel) outcome = "not paid (quote recorded only)";
+  else if (cancel) outcome = step("catalog_quote").length ? "not paid (quote recorded only)" : "no quote (no payable 402)";
+  else if (failed && !failed.landed_payment_tx) outcome = "purchase not completed (seller refused the payment, nothing landed)";
   else if (round) outcome = `error (exit ${round.exit})`;
   if (cancel) for (const e of cancel.excluded ?? []) notes.push(e.why);
   const rc = one("rerequest_check");
@@ -72,7 +73,7 @@ for (const [scenario, rs] of byScenario) {
   if (receipt?.present) notes.push(`Delivery Receipt ${receipt.ok ? "verified" : "INVALID: " + receipt.problems.join("; ")}`);
   if (ver && !ver.verified && (ful || rej)) notes.push(`indexer: not verified (${ver.verification?.reason ?? "-"})`);
   if (failed) notes.push(`first paid call HTTP ${failed.http_status}`);
-  const pv: string = probe?.verdict ?? (probe?.status ?? "-");
+  const pv: string = probe?.verdict ?? (probe?.status === "scored" ? "no paid measurement" : probe?.status ?? "-");
   const ours = outcome === "fulfilled" || outcome === "recovered" ? "delivered" : outcome;
   const match = label.startsWith("mock") || !probe ? "-"
     : !sent ? "- (not bought)"
@@ -108,7 +109,7 @@ lines.push(`| **mainnet total signed** | **${mainnet.length}** | **${fmtUsdc(sum
 const dev = outs.filter((o) => o.pay_net && !mainnet.includes(o));
 lines.push(`| devnet (mock seller) | ${dev.length} | ${fmtUsdc(sum(dev))} (devnet USDC) |`, "");
 lines.push("| outcome | RFQs |", "|---|---:|");
-for (const k of ["fulfilled", "recovered", "not_delivered", "delivered_without_settlement", "rejected", "not paid (quote recorded only)", "deferred", "error"])
+for (const k of ["fulfilled", "recovered", "not_delivered", "delivered_without_settlement", "rejected", "purchase not completed", "not paid (quote recorded only)", "no quote", "deferred", "error"])
   lines.push(`| ${k} | ${count((o) => o.outcome.startsWith(k))} |`);
 lines.push(`| **RFQs** | **${outs.length}** |`, "");
 const cmp = outs.filter((o) => o.match === "yes" || o.match.startsWith("no"));
