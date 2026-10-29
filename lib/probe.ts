@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 // x402 Seller Probe (probe.x402jp.com): drop quotes whose seller host scores below the
 // spec's `min_probe_score`. A host the Probe has not scored is not "below" it, and an
 // unreachable Probe API says nothing either: both keep the quote and are logged
@@ -54,9 +56,14 @@ let requiresInputList: Promise<Map<string, string>> | null = null;
 function requiresInput(timeoutMs: number): Promise<Map<string, string>> {
   requiresInputList ??= (async () => {
     try {
-      const r = await fetch(`${PROBE_URL()}/scores`, { signal: AbortSignal.timeout(Math.max(timeoutMs, 60_000)) });
-      if (!r.ok) return new Map();
-      const d: any = await r.json();
+      // PROBE_SCORES_FILE: a saved copy of GET /scores (6+ MB), so a batch fetches it once.
+      let d: any;
+      if (process.env.PROBE_SCORES_FILE) d = JSON.parse(readFileSync(process.env.PROBE_SCORES_FILE, "utf8"));
+      else {
+        const r = await fetch(`${PROBE_URL()}/scores`, { signal: AbortSignal.timeout(Math.max(timeoutMs, 60_000)) });
+        if (!r.ok) return new Map();
+        d = await r.json();
+      }
       return new Map((d?.paid_targets?.requires_input ?? []).map((x: any) => [String(x.host).toLowerCase(), String(x.reason)]));
     } catch {
       return new Map();
