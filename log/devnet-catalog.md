@@ -60,3 +60,15 @@ Explorer: `https://explorer.solana.com/tx/<sig>?cluster=devnet`
 
 - 模擬売り手は自前のローカルサーバーで、第三者の売り手には一切リクエストしていない。
 - 支払い額は 0.005 USDC × 2（devnet USDC）。上限（1コール $0.01・1日 $0.50）は変えていない。
+
+## 2026-10-29: Delivery Receipt と取り直し（`bash scripts/catalog-devnet.sh`）
+
+facilitator は x402.org を直接使用（模擬売り手が自分で「決済後に納品しない」を起こすため、pass-through での再現は不要になった）。
+
+| round | パス | 結果 | 支払い tx（devnet USDC 0.005） | 記録 tx |
+| --- | --- | --- | --- | --- |
+| 1 | `/api/flaky` | 1回目 503 → 同じ支払いヘッダで取り直し → 200、レシート検証 OK → **取り直しで回収**（Fulfillment, memo `recovered`） | `5Ssqfa8qUih4vin6WjWMmapM2obp1gWfSotYQeo4CA2kTZ4csY6Gu2kfdBS5uEA4baCjyJu5kUyvuB4MroWHfsXc` | `4YqiFKf3jvLtapeaVN5ng1xfi2JtLUVqnLAdkaF2ivfGtUZwADV4d7f987cZvfEwpjpLFXa94iKKC1tLp243GeWe` |
+| 2 | `/api/paid` | 200、レシート検証 OK → **成立** | `3LuNnZDdKKifdArp6TWkwanNuKHiKpoYLHtHDfuvKQC4KiveGomWGKHGZsds4oB4FMh1wCSpbtRsAx6mWwR3ujyp` | `5HPKvmzyfxhSg5xSouXP1tnLhziHmQSqnCLBDathZCZsZy17HpHxcgANmMfL8ddCKvkrAfU4obH5WuygBTZE137N` |
+| 3 | `/api/broken` | 1回目 503、取り直しも 503 → **not_delivered のまま**（Rejection, memo `retry: failed`） | `3mSTrivWniiWmJFRZVMwrqYXxhPn5U5aMkTdGRLC1zaBgUHmqrJzhU5h7GpYD9NqHAe339xMfSMcVjBFhMiGZPQb` | `BZR9wTvwGwaxRyzC6v1CGuWY6KrPyjP7ugoandf8a9h9YEXqbXUKhoztUzxHEiptxoxW4ZoWCHhn7gbebt3p6E6` |
+
+3 round とも、上限超え（0.02）と無料パス（200）は見送りとしてログに残った。インデクサの検証はすべて verified: true。

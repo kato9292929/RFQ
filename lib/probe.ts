@@ -20,23 +20,92 @@ export function checkMinProbeScore(v: unknown): number | undefined {
   return v;
 }
 
+/** Seller Probe's verdict on one of its own paid purchases. */
+export type ProbeVerdict = "delivered" | "not_delivered" | "delivered_without_settlement" | "request_rejected" | "failed";
+
+/** The Probe's latest paid measurement of a host (its own x402 purchase). */
+export type ProbePaid = { ts: string; url: string; network: string | null; amount: string | null; verdict: ProbeVerdict; tx: string | null };
+
 export type ProbeLookup =
-  | { status: "scored"; host: string; score: number | null; coverage: string | null }
+  | {
+      status: "scored"; host: string; score: number | null; coverage: string | null; last_paid: ProbePaid | null;
+      verdict: ProbeVerdict | null; delivered: boolean; requires_input: string | null;
+    }
   | { status: "unscored"; host: string }
   | { status: "unavailable"; host: string | null; error: string };
 
-export async function lookupProbe(endpointUri: string, timeoutMs = 5000): Promise<ProbeLookup> {
+/** 納品 / 払ったのに届かない / 送金なしで届いた / 購入不成立 / 失敗 */
+export function probeVerdict(h: any): ProbeVerdict | null {
+  if (!h || h.dry_run || (h.outcome == null && h.delivered == null)) return null; // signed but not sent
+  if (h.outcome === "delivered" && h.onchain_ok !== false) return "delivered";
+  if (h.delivered === true && h.onchain_ok === false) return "delivered_without_settlement";
+  if (h.outcome === "not_delivered") return "not_delivered";
+  if (h.outcome === "request_rejected") return "request_rejected";
+  return "failed";
+}
+
+// A rejection that says an input was missing (the Probe buys with a bare GET).
+const INPUT_HINT = /missing|required|param|invalid_input|invalid_request|method_not_allowed|use POST|takes POST/i;
+
+const cache = new Map<string, Promise<ProbeLookup>>();
+let requiresInputList: Promise<Map<string, string>> | null = null;
+
+/** The Probe's list of hosts it did not buy from because they need input (from GET /scores). */
+function requiresInput(timeoutMs: number): Promise<Map<string, string>> {
+  requiresInputList ??= (async () => {
+    try {
+      const r = await fetch(`${PROBE_URL()}/scores`, { signal: AbortSignal.timeout(Math.max(timeoutMs, 60_000)) });
+      if (!r.ok) return new Map();
+      const d: any = await r.json();
+      return new Map((d?.paid_targets?.requires_input ?? []).map((x: any) => [String(x.host).toLowerCase(), String(x.reason)]));
+    } catch {
+      return new Map();
+    }
+  })();
+  return requiresInputList;
+}
+
+/** GET /scores/:host once per host per process. */
+export function lookupProbe(endpointUri: string, timeoutMs = 5000): Promise<ProbeLookup> {
   const host = probeHost(endpointUri);
-  if (!host) return { status: "unavailable", host: null, error: `cannot parse host of ${endpointUri}` };
+  if (!host) return Promise.resolve({ status: "unavailable", host: null, error: `cannot parse host of ${endpointUri}` });
+  if (!cache.has(host)) cache.set(host, fetchProbe(host, timeoutMs));
+  return cache.get(host)!;
+}
+
+async function fetchProbe(host: string, timeoutMs: number): Promise<ProbeLookup> {
   try {
     const r = await fetch(`${PROBE_URL()}/scores/${encodeURIComponent(host)}`, { signal: AbortSignal.timeout(timeoutMs) });
     if (r.status === 404) return { status: "unscored", host };
     if (!r.ok) return { status: "unavailable", host, error: `HTTP ${r.status}` };
     const d: any = await r.json();
-    return { status: "scored", host, score: typeof d.score === "number" ? d.score : null, coverage: d.coverage ?? null };
+    const paid = (Array.isArray(d.history) ? d.history : [])
+      .filter((h: any) => h?.kind === "paid" && probeVerdict(h) !== null)
+      .sort((a: any, b: any) => String(b.ts).localeCompare(String(a.ts)))[0];
+    const last_paid: ProbePaid | null = paid
+      ? { ts: paid.ts, url: paid.url, network: paid.network ?? null, amount: paid.amount ?? null, verdict: probeVerdict(paid)!, tx: paid.tx ?? null }
+      : null;
+    const listed = (await requiresInput(timeoutMs)).get(host) ?? null;
+    const rej = d.last_rejection;
+    const observed = rej && INPUT_HINT.test(`${rej.http_status === 405 ? "method_not_allowed " : ""}${rej.error ?? ""}`)
+      ? `turned away for missing input (HTTP ${rej.http_status} at ${rej.ts})` : null;
+    return {
+      status: "scored", host, score: typeof d.score === "number" ? d.score : null, coverage: d.coverage ?? null,
+      last_paid, verdict: last_paid?.verdict ?? null, delivered: last_paid?.verdict === "delivered", requires_input: listed ?? observed,
+    };
   } catch (e: any) {
     return { status: "unavailable", host, error: e?.name === "TimeoutError" ? "timeout" : String(e?.message ?? e) };
   }
+}
+
+/** Why a host is not paid (null = payable on Probe grounds). Own hosts are decided by the caller. */
+export function probeNoPayReason(l: ProbeLookup): string | null {
+  if (l.status === "unavailable") return `Seller Probe did not answer (${l.error})`;
+  if (l.status === "unscored") return "not measured by Seller Probe";
+  if (l.requires_input) return `Seller Probe: requires input (${l.requires_input})`;
+  if (!l.last_paid) return "Seller Probe has no paid measurement";
+  if (l.verdict !== "delivered") return `Seller Probe latest paid verdict: ${l.verdict}`;
+  return null;
 }
 
 /**
