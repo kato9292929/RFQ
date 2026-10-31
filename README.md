@@ -84,6 +84,8 @@ SLA・拒否・カタログ見積もりの印は別 PDA に置いており、既
 スコアが `min_probe_score` 未満の見積もりを除外してから採択します（同額の扱いはその後）。Probe に記録のないホスト（404）は「未満」ではないので除外せず `probe_unscored` を、
 Probe の API が応答しないとき（タイムアウト 5 秒・5xx）も除外せず `probe_unavailable` をログに残して従来どおり選びます。
 照会結果・除外と理由は `log/*.jsonl` の `probe_filter` と `quotes_collected.excluded` に残ります。`min_probe_score` が 0〜100 の数でなければ RFQ を出す前に止まります。
+自社ホスト（`CATALOG_PAY_HOSTS` の基本リスト。既定は OSD・JIN）のカタログ見積もりは、もともと支払い先として許可しているのでスコアの判定から外し、`probe_exempt` として記録します。
+外すのはこのリストにあるホストだけで、スコアのない第三者ホストは従来どおり `probe_unscored` として記録します。第三者への支払いには、別途 Probe の直近の有料測定が「納品」であることが必要です。
 
 **受領判定**（買い手）: JSON であること → `fields` が揃っていること → `freshness_hours` → 仕様の `schema`（JSON Schema, Ajv）。
 売り手は見積もり前にカテゴリ・項目名・鮮度だけを判定し、Schema の制約は見ません。見送り理由と拒否理由は同じ語彙です（`scenarios/README.md`）。
