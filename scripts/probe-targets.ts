@@ -2,12 +2,18 @@
 // was `delivered` (納品), no input is required, at or under the per-call cap. Prints JSON [{host, url, network, amount, score, probe_tx}].
 // Our own hosts (OSD, JIN) are bought separately and excluded here.
 //   npx tsx scripts/probe-targets.ts > run/mixed/targets.json
+import { readFileSync } from "node:fs";
 import { OWN_HOSTS, maxPerCall } from "../lib/catalog.js";
 import { PROBE_URL, lookupProbe, probeNoPayReason } from "../lib/probe.js";
 
-const r = await fetch(`${PROBE_URL()}/scores`, { signal: AbortSignal.timeout(60_000) });
-if (!r.ok) throw new Error(`Probe /scores → HTTP ${r.status}`);
-const all: any[] = (await r.json()).scores ?? [];
+let scores: any;
+if (process.env.PROBE_SCORES_FILE) scores = JSON.parse(readFileSync(process.env.PROBE_SCORES_FILE, "utf8"));
+else {
+  const r = await fetch(`${PROBE_URL()}/scores`, { signal: AbortSignal.timeout(60_000) });
+  if (!r.ok) throw new Error(`Probe /scores → HTTP ${r.status}`);
+  scores = await r.json();
+}
+const all: any[] = scores.scores ?? [];
 const candidates = all.filter((s) => (s.paid_outcomes?.delivered ?? 0) > 0 && !OWN_HOSTS.includes(s.host));
 const out = [];
 for (const c of candidates) {

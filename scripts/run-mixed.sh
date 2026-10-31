@@ -42,6 +42,9 @@ node --import tsx indexer/src/server.ts > "$RUN_DIR/indexer.log" 2>&1 & PIDS+=($
 FACILITATOR_URL=https://x402.org/facilitator node --import tsx scripts/mock-catalog-seller.ts > "$RUN_DIR/mock-catalog.log" 2>&1 & PIDS+=($!)
 for _ in $(seq 1 60); do curl -sf "$INDEXER_URL/health" >/dev/null && curl -s -o /dev/null http://127.0.0.1:8810/api/free && break; sleep 1; done
 
+# Seller Probe: one copy of GET /scores for the whole batch (per-host /scores/{host} stays live)
+curl -sSf -m 120 https://probe.x402jp.com/scores -o "$RUN_DIR/probe-scores.json" && export PROBE_SCORES_FILE="$RUN_DIR/probe-scores.json" \
+  || echo "Seller Probe /scores unavailable: only our own hosts will be paid"
 npx tsx scripts/probe-targets.ts > "$RUN_DIR/targets.json"
 spec() { # spec <file> <host> <url>...
   local f=$1 h=$2; shift 2
@@ -73,7 +76,7 @@ for item in "${ITEMS[@]}"; do
   fi
   t0=$(date +%s)
   set +e
-  env $extra BUYER_SCENARIO="$name" BUYER_SPEC_FILE="$specf" BUYER_MAX_PRICE=10000 BUYER_RFQ_WINDOW_SEC=8 \
+  env $extra BUYER_SCENARIO="$name" BUYER_SPEC_FILE="$specf" BUYER_MAX_PRICE=10000 BUYER_RFQ_WINDOW_SEC=40 \
     npx tsx agents/buyer/src/index.ts > "$RUN_DIR/buyer-$n-$label.log" 2>&1
   r=$?
   set -e
