@@ -30,7 +30,7 @@ export const MAX_CATALOG_ENDPOINTS = 5;
 
 /** Our own sellers (OSD, JIN). CATALOG_PAY_HOSTS replaces this base list (tests use 127.0.0.1). */
 export const OWN_HOSTS = ["osd.x402jp.com", "jin.x402jp.com"];
-const baseHosts = () =>
+export const baseHosts = () =>
   (process.env.CATALOG_PAY_HOSTS ?? OWN_HOSTS.join(","))
     .split(",")
     .map((h) => h.trim().toLowerCase())

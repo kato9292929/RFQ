@@ -118,20 +118,31 @@ export function probeNoPayReason(l: ProbeLookup): string | null {
 /**
  * Pure: which quotes stay. Only a host with a score below `min` is excluded;
  * unscored hosts and an unavailable Probe never exclude.
+ * `exemptHosts`: catalog quotes from these hosts (our own, on the CATALOG_PAY_HOSTS base list)
+ * skip the score check. Only catalog quotes whose host is on that list; a third-party host
+ * without a score is still recorded as probe_unscored.
  */
-export function applyProbeFilter<Q extends { pubkey: string; seller: string }>(
-  quotes: Q[], lookups: Map<string, ProbeLookup>, min: number,
+export function applyProbeFilter<Q extends { pubkey: string; seller: string; catalog?: { host: string } | null }>(
+  quotes: Q[], lookups: Map<string, ProbeLookup>, min: number, exemptHosts: string[] = [],
 ): {
   kept: Q[];
   excluded: { quote: string; seller: string; why: string }[];
   unscored: { quote: string; host: string }[];
   unavailable: { quote: string; host: string | null; error: string }[];
+  exempt: { quote: string; host: string }[];
 } {
   const kept: Q[] = [];
+  const exempt: { quote: string; host: string }[] = [];
   const excluded: { quote: string; seller: string; why: string }[] = [];
   const unscored: { quote: string; host: string }[] = [];
   const unavailable: { quote: string; host: string | null; error: string }[] = [];
   for (const q of quotes) {
+    const own = q.catalog?.host?.toLowerCase();
+    if (own && exemptHosts.includes(own)) {
+      exempt.push({ quote: q.pubkey, host: own });
+      kept.push(q);
+      continue;
+    }
     const l = lookups.get(q.pubkey);
     if (!l || l.status === "unavailable") {
       unavailable.push({ quote: q.pubkey, host: l?.host ?? null, error: l && l.status === "unavailable" ? l.error : "no lookup" });
@@ -144,5 +155,5 @@ export function applyProbeFilter<Q extends { pubkey: string; seller: string }>(
       excluded.push({ quote: q.pubkey, seller: q.seller, why: `probe_score ${l.score} (${l.coverage}) < min_probe_score=${min} for ${l.host}` });
     } else kept.push(q);
   }
-  return { kept, excluded, unscored, unavailable };
+  return { kept, excluded, unscored, unavailable, exempt };
 }

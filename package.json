@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test:catalog": "tsx test/catalog-unit.ts",
     "test:payment": "tsx test/payment-net-unit.ts",
+    "test:probe": "tsx test/probe-unit.ts",
     "wallet:new": "tsx scripts/wallet-new.ts",
     "rent:check": "tsx scripts/rent-check.ts"
   },

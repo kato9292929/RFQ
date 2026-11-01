@@ -21,7 +21,7 @@ import {
 } from "../../../lib/common.js";
 import { PROBE_URL, applyProbeFilter, checkMinProbeScore, lookupProbe, probeNoPayReason, type ProbeLookup } from "../../../lib/probe.js";
 import {
-  OWN_HOSTS, catalogSpentToday, fetch402, hostOf, loadCatalog, loadPathOverrides, maxPerCall, maxPerDay, payHosts, pickAccept, retryAllowed, selectCatalogUrls,
+  OWN_HOSTS, baseHosts, catalogSpentToday, fetch402, hostOf, loadCatalog, loadPathOverrides, maxPerCall, maxPerDay, payHosts, pickAccept, retryAllowed, selectCatalogUrls,
   type CatalogMatch,
 } from "../../../lib/catalog.js";
 import {
@@ -193,7 +193,8 @@ let eligible = (detail.quotes as any[]).filter((q) => {
 let probeFilter: Record<string, unknown> | null = null;
 if (MIN_PROBE_SCORE !== undefined && eligible.length) {
   const lookups = new Map<string, ProbeLookup>(await Promise.all(eligible.map(async (q) => [q.pubkey, await lookupProbe(q.endpoint_uri)] as const)));
-  const r = applyProbeFilter(eligible, lookups, MIN_PROBE_SCORE);
+  // Our own hosts are already allowlisted for payment; an outside score does not gate them.
+  const r = applyProbeFilter(eligible, lookups, MIN_PROBE_SCORE, baseHosts());
   eligible = r.kept;
   excluded.push(...r.excluded);
   probeFilter = {
@@ -202,8 +203,10 @@ if (MIN_PROBE_SCORE !== undefined && eligible.length) {
     excluded: r.excluded,
     probe_unscored: r.unscored,
     probe_unavailable: r.unavailable,
+    probe_exempt: r.exempt,
   };
   record("probe_filter", { rfq: rfq.toBase58(), ...probeFilter });
+  if (r.exempt.length) log(`probe_exempt (own host on CATALOG_PAY_HOSTS): ${r.exempt.map((e) => e.host).join(", ")}`);
   if (r.unscored.length) log(`probe_unscored for ${r.unscored.length} quote(s) — kept (no score is not below the minimum)`);
   if (r.unavailable.length) log(`probe_unavailable for ${r.unavailable.length} quote(s) — kept, selection proceeds as before`);
   if (r.excluded.length) log(`probe excluded: ${r.excluded.map((e) => `${e.seller.slice(0, 6)} (${e.why})`).join(", ")}`);
