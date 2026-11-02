@@ -21,7 +21,7 @@ import {
 } from "../../../lib/common.js";
 import { PROBE_URL, applyProbeFilter, checkMinProbeScore, lookupProbe, probeNoPayReason, type ProbeLookup } from "../../../lib/probe.js";
 import {
-  OWN_HOSTS, baseHosts, catalogSpentToday, fetch402, hostOf, loadCatalog, loadPathOverrides, maxPerCall, maxPerDay, payHosts, pickAccept, retryAllowed, selectCatalogUrls,
+  OWN_HOSTS, baseHosts, catalogSpentToday, netFailures, recordNetFailure, fetch402, hostOf, loadCatalog, loadPathOverrides, maxPerCall, maxPerDay, payHosts, pickAccept, retryAllowed, selectCatalogUrls,
   type CatalogMatch,
 } from "../../../lib/catalog.js";
 import {
@@ -102,11 +102,13 @@ if (catalogMatch) {
   log(`catalog: ${urls.length} endpoint(s) from ${catalogMatch.urls?.length ? "the spec's urls" : catalog.source} (cap ${fmtUsdc(cap)} USDC per call)`);
   type Best = { url: string; amount: bigint; payTo: string; network: string; payable: boolean; probe: ProbeLookup };
   const best = new Map<string, Best>();
+  const refused = netFailures();
   for (const url of urls) {
     const host = hostOf(url)!;
     const probe = await lookupProbe(url);
     const r = await fetch402(url);
-    const picked = r.ok ? pickAccept(r.accepts, [...payers.keys()], cap) : r;
+    // a network this host already refused our payment on (this batch) is not chosen again
+    const picked = r.ok ? pickAccept(r.accepts, [...payers.keys()], cap, refused.get(host) ?? []) : r;
     record("catalog_402", {
       rfq: rfq.toBase58(), url, host, ok: picked.ok, probe,
       ...(picked.ok ? { amount: picked.amount.toString(), pay_to: picked.payTo, network: picked.network, payable: picked.payable } : { reason: picked.reason }),
@@ -168,25 +170,26 @@ record("catalog_pay_hosts", { rfq: rfq.toBase58(), pay_hosts: allowedPayHosts, p
 // Catalog payment limits, enforced here and again right before signing.
 const spentToday = catalogSpentToday();
 const nowS = Math.floor(Date.now() / 1000);
-const excluded: { quote: string; seller: string; why: string }[] = [];
+// Every exclusion carries a code (for the run report) and a human-readable reason.
+const excluded: { quote: string; seller: string; code: string; why: string }[] = [];
 let eligible = (detail.quotes as any[]).filter((q) => {
-  const why =
-    q.expires_at <= nowS + 30 ? "quote expires too soon"
-    : !q.endpoint_hash_ok ? "endpoint_hash does not match endpoint_uri"
-    : BigInt(q.price) > MAX_PRICE ? "price above max_price"
-    : spec.max_latency_ms !== undefined && !q.sla ? `no SLA declared (spec max_latency_ms=${spec.max_latency_ms})`
+  const [code, why] =
+    q.expires_at <= nowS + 30 ? ["expires_soon", "quote expires too soon"]
+    : !q.endpoint_hash_ok ? ["endpoint_hash", "endpoint_hash does not match endpoint_uri"]
+    : BigInt(q.price) > MAX_PRICE ? ["above_max_price", "price above max_price"]
+    : spec.max_latency_ms !== undefined && !q.sla ? ["no_sla", `no SLA declared (spec max_latency_ms=${spec.max_latency_ms})`]
     : spec.max_latency_ms !== undefined && q.sla.max_latency_ms > spec.max_latency_ms
-      ? `SLA ${q.sla.max_latency_ms}ms > spec max_latency_ms=${spec.max_latency_ms}`
+      ? ["sla_too_slow", `SLA ${q.sla.max_latency_ms}ms > spec max_latency_ms=${spec.max_latency_ms}`]
     : q.source === "catalog" && !payers.has(q.catalog?.network)
-      ? `catalog quote on ${q.catalog?.network}: this buyer does not pay on that network (recorded only)`
+      ? ["not_payable_network", `catalog quote on ${q.catalog?.network}: this buyer does not pay on that network (recorded only)`]
     : q.source === "catalog" && !allowedPayHosts.includes(q.catalog?.host)
-      ? `catalog host ${q.catalog?.host} not paid: ${probeNoPay[q.catalog?.host] ?? "not ours and not delivered in Seller Probe"} (recorded only)`
-    : q.source === "catalog" && BigInt(q.price) > maxPerCall() ? `catalog price above per-call cap ${fmtUsdc(maxPerCall())}`
-    : q.source === "catalog" && spentToday + BigInt(q.price) > maxPerDay()
-      ? `catalog daily cap: spent ${fmtUsdc(spentToday)} + ${q.price_usdc} > ${fmtUsdc(maxPerDay())}`
-    : "";
-  if (why) excluded.push({ quote: q.pubkey, seller: q.seller, why });
-  return !why;
+      ? ["not_payable_host", `catalog host ${q.catalog?.host} not paid: ${probeNoPay[q.catalog?.host] ?? "not ours and not delivered in Seller Probe"} (recorded only)`]
+    : q.source === "catalog" && BigInt(q.price) > maxPerCall() ? ["above_per_call_cap", `catalog price above per-call cap ${fmtUsdc(maxPerCall())}`]
+    : ["", ""];
+  // The daily cap is not an exclusion: the RFQ is still awarded, and the payment is refused
+  // right before signing (see below), so quotes and the award stay on record.
+  if (code) excluded.push({ quote: q.pubkey, seller: q.seller, code, why });
+  return !code;
 });
 
 // Seller quality gate (x402 Seller Probe). Applied after the price/SLA checks, before the tie-break.
@@ -196,7 +199,7 @@ if (MIN_PROBE_SCORE !== undefined && eligible.length) {
   // Our own hosts are already allowlisted for payment; an outside score does not gate them.
   const r = applyProbeFilter(eligible, lookups, MIN_PROBE_SCORE, baseHosts());
   eligible = r.kept;
-  excluded.push(...r.excluded);
+  excluded.push(...r.excluded.map((e) => ({ ...e, code: "below_min_probe_score" })));
   probeFilter = {
     probe_url: PROBE_URL(), min_probe_score: MIN_PROBE_SCORE,
     lookups: [...lookups].map(([quote, l]) => ({ quote, ...l })),
@@ -238,6 +241,29 @@ if (eligible.length) {
       ...(first.length > 1 ? { random_index: pick, of: first.length } : {}),
     };
   }
+}
+// One line per quote: kept or excluded, why, and its Probe score (for the threshold report).
+{
+  const probeTags = new Map<string, string>();
+  for (const e of (probeFilter?.probe_exempt as any[]) ?? []) probeTags.set(e.quote, "probe_exempt");
+  for (const e of (probeFilter?.probe_unscored as any[]) ?? []) probeTags.set(e.quote, "probe_unscored");
+  for (const e of (probeFilter?.probe_unavailable as any[]) ?? []) probeTags.set(e.quote, "probe_unavailable");
+  const decisions = [];
+  for (const q of detail.quotes as any[]) {
+    const l = await lookupProbe(q.endpoint_uri);
+    const ex = excluded.find((e) => e.quote === q.pubkey);
+    decisions.push({
+      quote: q.pubkey, host: q.catalog?.host ?? null, price: q.price, network: q.catalog?.network ?? null,
+      probe_status: l.status, probe_score: l.status === "scored" ? l.score : null, probe_verdict: l.status === "scored" ? l.verdict : null,
+      decision: ex ? "excluded" : "kept", code: ex?.code ?? probeTags.get(q.pubkey) ?? "kept", why: ex?.why ?? null,
+      // the Probe's view even when another check excluded the quote first
+      probe_tag: OWN_HOSTS.includes(q.catalog?.host) || baseHosts().includes(q.catalog?.host) ? "probe_exempt"
+        : l.status === "unscored" || (l.status === "scored" && l.score === null) ? "probe_unscored"
+        : l.status === "unavailable" ? "probe_unavailable"
+        : MIN_PROBE_SCORE !== undefined && l.status === "scored" && (l.score ?? 0) < MIN_PROBE_SCORE ? "below_min_probe_score" : "scored_ok",
+    });
+  }
+  record("quote_decisions", { rfq: rfq.toBase58(), min_probe_score: MIN_PROBE_SCORE ?? null, decisions });
 }
 record("quotes_collected", {
   rfq: rfq.toBase58(),
@@ -320,7 +346,8 @@ if (isCatalog) {
   const spent = catalogSpentToday();
   if (BigInt(win.price) > maxPerCall() || spent + BigInt(win.price) > maxPerDay()) {
     record("catalog_cap_refused", { rfq: rfq.toBase58(), price: win.price, spent_today: spent.toString(), max_per_call: maxPerCall().toString(), max_per_day: maxPerDay().toString() });
-    throw new Error(`catalog cap: price ${win.price}, spent today ${spent} (per call ${maxPerCall()}, per day ${maxPerDay()})`);
+    log(`catalog cap: price ${win.price}, spent today ${spent} (per call ${maxPerCall()}, per day ${maxPerDay()}) — awarded, not paid`);
+    process.exit(5); // quotes and the award stay on record; no payment
   }
 }
 const payload = await http.createPaymentPayload(required);
@@ -379,6 +406,12 @@ if (paid.status !== 200) {
   });
   if (!landed || !landed.ok) {
     log("no landed payment found — nothing paid, nothing delivered; RFQ stays awarded");
+    // The seller answered 402 again to a valid payment on this network: remember (host, network)
+    // so later RFQs in the batch pay this host on another network, or drop it.
+    if (paid.status === 402 && isCatalog) {
+      recordNetFailure(host, network, { rfq: rfq.toBase58(), buyer_signature: buyerPaymentSig });
+      record("net_failure", { rfq: rfq.toBase58(), host, network, http_status: paid.status });
+    }
     process.exit(1);
   }
   // Paid, not delivered. Our own sellers and local test sellers may be asked once more with

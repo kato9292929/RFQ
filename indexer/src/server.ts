@@ -470,6 +470,9 @@ app.get(
       const row = rows.get(seller) ?? {
         seller, source: cat ? "catalog" : "seller", host: cat?.host ?? null, pay_to: [] as string[], quotes: 0, awarded: 0, fulfilled: 0, rejected: 0, rejected_by_reason: {} as Record<string, number>,
         sla_declared: 0, sla_measured: 0, sla_met: 0, endpoint_hosts: [] as string[], pay_networks: [] as string[], recovered: 0, delivered_without_settlement: 0,
+        // per payment network: fulfilled / rejected (paid, refused on delivery) / not_completed
+        // (awarded, no fulfillment or rejection recorded — e.g. the seller refused the payment)
+        by_network: {} as Record<string, { fulfilled: number; rejected: number; not_completed: number; failed: number }>,
       };
       row.quotes++;
       const payNet = cat?.network ?? X402_NETWORK();
@@ -484,6 +487,11 @@ app.get(
         row.awarded++;
         // 送金なしで届いた is not a completed trade: counted apart, never as fulfilled.
         const k = q.account.rfq.toBase58();
+        const nb = (row.by_network[payNet] ??= { fulfilled: 0, rejected: 0, not_completed: 0, failed: 0 });
+        if (STATUS[r.status] === "fulfilled" && !withoutSettlement.has(k)) nb.fulfilled++;
+        if (STATUS[r.status] === "rejected") nb.rejected++;
+        if (STATUS[r.status] === "awarded") nb.not_completed++;
+        nb.failed = nb.rejected + nb.not_completed;
         if (STATUS[r.status] === "fulfilled" && withoutSettlement.has(k)) row.delivered_without_settlement++;
         else if (STATUS[r.status] === "fulfilled") row.fulfilled++;
         if (STATUS[r.status] === "fulfilled" && recovered.has(k)) row.recovered++;
