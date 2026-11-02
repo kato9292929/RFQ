@@ -19,19 +19,44 @@ export function evmAuthorizationNonce(payload: any): Hex {
 
 const AUTH_USED = keccak256(toBytes("AuthorizationUsed(address,bytes32)"));
 
-/** Find the tx that used our authorization (USDC emits AuthorizationUsed(authorizer, nonce)). */
+const AUTH_STATE = parseAbiItem("function authorizationState(address authorizer, bytes32 nonce) view returns (bool)");
+
+/**
+ * Did our authorization land? Polls USDC's authorizationState(authorizer, nonce) — one eth_call,
+ * which public RPCs allow — and only when it is used looks up the tx through AuthorizationUsed
+ * logs in small block windows (public Base RPC limits eth_getLogs). RPC errors are retried.
+ */
 export async function findLandedEvm(p: EvmPayer, nonce: Hex, timeoutMs = 90_000): Promise<{ hash: string; ok: boolean } | null> {
   const c = evmClient(p.rpcUrl);
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
-    const latest = await c.getBlockNumber();
-    const logs = await c.request({
-      method: "eth_getLogs",
-      params: [{ address: p.usdc, fromBlock: `0x${(latest - 1800n).toString(16)}`, toBlock: "latest", topics: [AUTH_USED, pad(p.address as Hex), nonce] }],
-    }) as any[];
-    if (logs.length) {
-      const r = await c.getTransactionReceipt({ hash: logs[0].transactionHash });
-      return { hash: logs[0].transactionHash, ok: r.status === "success" };
+    let used = false;
+    try {
+      used = await c.readContract({ address: p.usdc, abi: [AUTH_STATE], functionName: "authorizationState", args: [p.address as Hex, nonce] });
+    } catch {
+      /* transient RPC error: retry */
+    }
+    if (used) {
+      const latest = await c.getBlockNumber();
+      for (let to = latest; to > latest - 3000n; to -= 100n) {
+        for (let attempt = 0; attempt < 4; attempt++) {
+          try {
+            const logs = (await c.request({
+              method: "eth_getLogs",
+              params: [{ address: p.usdc, fromBlock: `0x${(to - 99n).toString(16)}`, toBlock: `0x${to.toString(16)}`, topics: [AUTH_USED, pad(p.address as Hex), nonce] }],
+            })) as any[];
+            if (logs.length) {
+              const r = await c.getTransactionReceipt({ hash: logs[0].transactionHash });
+              return { hash: logs[0].transactionHash, ok: r.status === "success" };
+            }
+            break;
+          } catch {
+            await sleep(1500 * (attempt + 1));
+          }
+        }
+      }
+      // used, but the tx was not found in the scanned window: report it as landed without a hash
+      return { hash: "", ok: true };
     }
     await sleep(4000);
   }

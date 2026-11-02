@@ -366,6 +366,12 @@ const payExplorer = (sig: string) => explorerFor(network, sig);
 async function findLanded(p: Payer): Promise<{ tx: string; ok: boolean } | null> {
   if (p.kind === "evm") {
     const l = await findLandedEvm(p, buyerPaymentSig as `0x${string}`);
+    if (l && !l.hash) {
+      // the authorization was used, but its tx did not show up in the scanned blocks
+      record("x402_landed_tx_unknown", { rfq: rfq.toBase58(), network, buyer_signature: buyerPaymentSig });
+      log("payment landed (authorization used) but its tx was not found; stopping without a record");
+      process.exit(1);
+    }
     return l ? { tx: l.hash, ok: l.ok } : null;
   }
   const l = await findLandedPayment(p.conn, getAssociatedTokenAddressSync(p.usdcMint, p.keypair.publicKey), buyerPaymentSig);
