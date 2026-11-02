@@ -146,6 +146,8 @@ export function pickAccept(accepts: Accept[], payable: string[], max: bigint, av
   if (all.length && !exact.length) return { ok: false, reason: `payment refused earlier on ${avoid.join(", ")} and no other network offered` };
   if (!exact.length) return { ok: false, reason: "no exact scheme offered" };
   const usdc = exact.filter((a) => USDC_BY_NETWORK[a.network] !== undefined && a.asset?.toLowerCase() === USDC_BY_NETWORK[a.network].toLowerCase());
+  if (!usdc.length && all.some((a) => avoid.includes(a.network)))
+    return { ok: false, reason: `payment refused earlier on ${[...new Set(all.filter((a) => avoid.includes(a.network)).map((a) => a.network))].join(", ")}; no other payable network offered` };
   if (!usdc.length) return { ok: false, reason: `no USDC option on a known network (offered: ${[...new Set(exact.map((a) => a.network))].join(", ")})` };
   const problems: string[] = [];
   const ok: Extract<Picked, { ok: true }>[] = [];
@@ -158,6 +160,8 @@ export function pickAccept(accepts: Accept[], payable: string[], max: bigint, av
     if (!a.payTo) { problems.push("no payTo"); continue; }
     ok.push({ ok: true, amount, payTo: a.payTo, network: a.network, payable: payable.includes(a.network) });
   }
+  const avoided = all.filter((a) => avoid.includes(a.network)).map((a) => a.network);
+  if (!ok.length && avoided.length) return { ok: false, reason: `payment refused earlier on ${[...new Set(avoided)].join(", ")}; no other payable network offered` };
   if (!ok.length) return { ok: false, reason: [...new Set(problems)].join("; ") || "no usable option" };
   if (avoid.length && !ok.some((o) => o.payable)) return { ok: false, reason: `payment refused earlier on ${avoid.join(", ")}; no other payable network offered` };
   ok.sort((x, y) => Number(y.payable) - Number(x.payable) || payable.indexOf(x.network) - payable.indexOf(y.network) || (x.amount < y.amount ? -1 : 1));

@@ -21,13 +21,16 @@ for (const f of logs) {
     }
   }
 }
+// (host, network) refusals of this batch, incl. hand-recorded ones (with a note)
+const nfFile = resolve(ROOT, "run/threshold", `net-failures-${batch}.jsonl`);
+const nfRows: any[] = existsSync(nfFile) ? readFileSync(nfFile, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
 const byScenario = new Map<string, any[]>();
 for (const r of rows) byScenario.set(r.scenario, [...(byScenario.get(r.scenario) ?? []), r]);
 const net = (n?: string | null) => (n === SOLANA_MAINNET_CAIP2 ? "Solana" : n === BASE_MAINNET_CAIP2 ? "Base" : n?.startsWith("solana:Et") ? "devnet" : n ?? "-");
 const short = (s?: string | null, n = 12) => (s ? `${s.slice(0, n)}…` : "-");
 
 type Rfq = {
-  T: number; cat: string; winner: string | null; price: bigint | null; latency: number | null; outcome: string; payNet: string | null;
+  T: number; cat: string; startedAt?: string; winner: string | null; price: bigint | null; latency: number | null; outcome: string; payNet: string | null;
   payTx: string | null; recordTx: string | null; wall: number | null; decisions: any[]; amount: bigint; landed: boolean; notes: string[];
 };
 const out: Rfq[] = [];
@@ -52,16 +55,21 @@ for (const [, rs] of byScenario) {
   else if (rej) outcome = rej.reason === "not_delivered" ? "not_delivered" : `rejected (${rej.reason})`;
   else if (cap) outcome = "awarded, not paid (daily cap)";
   else if (failed && !failed.landed_payment_tx) outcome = "purchase not completed (payment refused, nothing landed)";
+  else if (sent && !paid && !failed) outcome = "purchase not completed (payment refused; buyer stopped on a Base RPC limit, nothing landed)";
   else if (cancel) outcome = "no eligible quote (cancelled)";
   else outcome = `error (exit ${round.exit})`;
+  for (const h of nfRows.filter((x) => x.note && (x.rfq === award?.rfq || String(round.scenario).endsWith(x.rfq)))) notes.push(`${h.host} on ${net(h.network)}: ${h.note}`);
+  if (one("x402_landed_tx_unknown")) notes.push("the buyer saw the authorization used but could not find its tx (public Base RPC limit); the tx was found afterwards and not_delivered recorded by scripts/record-catalog-not-delivered.ts");
+  const fb = failed?.body ? String(failed.body) : "";
+  if (fb && fb !== "{}") notes.push(`seller's 402 body: ${fb.slice(0, 160)}`);
   const nf = one("net_failure");
   if (nf) notes.push(`payment refused on ${net(nf.network)} → (${nf.host}, ${net(nf.network)}) remembered for the rest of the batch`);
   for (const r of rs.filter((x) => x.step === "catalog_402" && !x.ok)) notes.push(`${r.url}: not quoted (${r.reason})`);
   out.push({
-    T: round.threshold, cat: round.category, winner: winDec?.host ?? null, price: award ? BigInt(award.price) : null,
-    latency: paid?.latency_ms ?? null, outcome, payNet: sent?.network ?? null, payTx: paid?.payment_tx ?? failed?.landed_payment_tx ?? null,
+    T: round.threshold, cat: round.category, startedAt: rs[0]?.ts, winner: winDec?.host ?? null, price: award ? BigInt(award.price) : null,
+    latency: paid?.latency_ms ?? null, outcome, payNet: sent?.network ?? null, payTx: paid?.payment_tx ?? failed?.landed_payment_tx ?? rej?.payment_tx ?? null,
     recordTx: ful?.tx ?? rej?.tx ?? cancel?.tx ?? null, wall: round.wall_seconds ?? null, decisions: dec,
-    amount: sent ? BigInt(sent.amount) : 0n, landed: !!(paid && !dws) || !!failed?.landed_payment_tx, notes,
+    amount: sent ? BigInt(sent.amount) : 0n, landed: !!(paid && !dws) || !!failed?.landed_payment_tx || !!rej?.payment_tx, notes,
   });
 }
 const thresholds = [...new Set(out.map((o) => o.T))].sort((a, b) => a - b);
@@ -102,7 +110,7 @@ for (const T of thresholds) {
 L.push("", "平均価格は採択した見積もりの価格、平均応答時間は有料呼び出しの往復時間（支払って本文を受け取るまで）。成立には取り直しで回収した分を含む。", "");
 
 L.push("## 閾値を上げて採択先が変わった RFQ", "", `基準は閾値 ${base} の回。`, "");
-L.push("| 分野 | 閾値 | 採択先（基準 → この回） | 価格（基準 → この回） | 応答時間（基準 → この回） | 結果 |", "|---|---:|---|---|---|---|");
+L.push("| 分野 | 閾値 | 採択先（基準 → この回） | 変わった理由 | 価格（基準 → この回） | 応答時間（基準 → この回） | 結果 |", "|---|---:|---|---|---|---|---|");
 for (const c of cats) for (const T of thresholds) {
   if (T === base) continue;
   const b = at(base, c), o = at(T, c);
@@ -110,7 +118,13 @@ for (const c of cats) for (const T of thresholds) {
   const p = (x?: bigint | null) => (x === null || x === undefined ? "-" : fmtUsdc(x));
   const signed = (d: bigint) => `${d < 0n ? "-" : "+"}${fmtUsdc(d < 0n ? -d : d)}`;
   const diff = b.price !== null && o.price !== null ? ` (${signed(o.price - b.price)})` : "";
-  L.push(`| ${c} | ${T} | ${b.winner ?? "なし"} → ${o.winner ?? "なし"} | ${p(b.price)} → ${p(o.price)}${diff} | ${b.latency ?? "-"} → ${o.latency ?? "-"} ms | ${o.outcome} |`);
+  // why the threshold-0 winner did not win here
+  const d0 = o.decisions.find((d: any) => d.host === b.winner);
+  const refusedBefore = nfRows.some((x) => x.host === b.winner && Date.parse(x.ts) < Date.parse(o.startedAt ?? ""));
+  const why = !d0 ? (refusedBefore || o.notes.some((n) => n.includes(b.winner ?? "?") && n.includes("refused earlier")) ? "支払い拒否の記憶（§3）で見積もり外" : "見積もりなし")
+    : d0.code === "below_min_probe_score" ? `閾値（スコア ${d0.probe_score}）`
+    : !o.winner ? "残る候補なし" : `同額で採択順（${d0.code}）`;
+  L.push(`| ${c} | ${T} | ${b.winner ?? "なし"} → ${o.winner ?? "なし"} | ${why} | ${p(b.price)} → ${p(o.price)}${diff} | ${b.latency ?? "-"} → ${o.latency ?? "-"} ms | ${o.outcome} |`);
 }
 L.push("");
 

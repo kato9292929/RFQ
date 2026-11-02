@@ -79,7 +79,8 @@ export async function loadPayers(recordKp: Keypair, recordMint: PublicKey): Prom
   return { payers, notes };
 }
 
-export const baseRpcUrl = () => process.env.BASE_RPC_URL || "https://mainnet.base.org";
+// publicnode answers eth_getLogs over thousands of blocks; mainnet.base.org rate-limits it.
+export const baseRpcUrl = () => process.env.BASE_RPC_URL || "https://base-rpc.publicnode.com";
 export const isEvm = (network: string) => network.startsWith("eip155:");
 
 /**
