@@ -1,6 +1,8 @@
 // Checks for the Seller Probe gate in lib/probe.ts: npx tsx test/probe-unit.ts
 import assert from "node:assert/strict";
-import { applyProbeFilter, probeNoPayReason, type ProbeLookup } from "../lib/probe.js";
+import { createServer } from "node:http";
+import { adjustThreshold, applyProbeFilter, probeNoPayReason, type ProbeLookup } from "../lib/probe.js";
+import { findLandedEvm } from "../lib/evm-pay.js";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -65,5 +67,77 @@ assert.deepEqual(applyProbeFilter(quotes, lookups, 50).excluded.map((e) => e.quo
   assert.match((pickAccept(solOnly, [SOL, BASE], 10_000n, avoid) as any).reason, /refused earlier/, "no other network offered → host dropped");
   recordNetFailure("x402helper.xyz", BASE, { rfq: "R2" }, file);
   assert.match((pickAccept(accepts, [SOL, BASE], 10_000n, netFailures(file).get("x402helper.xyz")) as any).reason, /refused earlier/);
+}
+// Per-RFQ lowering of min_probe_score (requested 99, min_candidates 2, floor 85)
+{
+  const qs = (xs: [string, number][]) => xs.map(([h]) => q(h, h));
+  const lk = (xs: [string, number][]) => new Map<string, ProbeLookup>(xs.map(([h, sc]) => [h, scored(h, sc)]));
+  // one candidate at 99 → lowered to the highest score that keeps 2
+  const a: [string, number][] = [["a.example", 99.6], ["b.example", 95.8], ["c.example", 91.1], ["d.example", 88]];
+  const ra = adjustThreshold(qs(a), lk(a), 99, 2, 85);
+  assert.deepEqual([ra.reason, ra.effective, ra.passing_at_requested, ra.passing_at_effective], ["lowered", 95.8, 1, 2]);
+  assert.ok(ra.effective >= 85 && ra.effective <= 99);
+  assert.deepEqual(applyProbeFilter(qs(a), lk(a), ra.effective).kept.map((k) => k.pubkey), ["a.example", "b.example"]);
+  // floor 85 still leaves one → floor_reached, award among the one left
+  const b: [string, number][] = [["a.example", 99.6], ["low.example", 80]];
+  const rb = adjustThreshold(qs(b), lk(b), 99, 2, 85);
+  assert.deepEqual([rb.reason, rb.effective, rb.passing_at_effective], ["floor_reached", 85, 1]);
+  assert.deepEqual(applyProbeFilter(qs(b), lk(b), rb.effective).kept.map((k) => k.pubkey), ["a.example"]);
+  // enough at the requested score → unchanged
+  assert.equal(adjustThreshold(qs(a), lk(a), 90, 2, 85).reason, "none");
+  // own exempt host counts as passing and is never lowered for
+  const c: [string, number][] = [["osd.x402jp.com", 20], ["x.example", 92]];
+  assert.deepEqual([adjustThreshold(qs(c), lk(c), 99, 2, 85, baseHosts()).effective], [92]);
+  // lowering never lets in an unscored third party or a non-delivered verdict: they fail the payment
+  // gate first (the buyer only adjusts over quotes that passed it)
+  const gate = (l: ProbeLookup) => probeNoPayReason(l) === null;
+  const nd: ProbeLookup = { status: "scored", host: "nd.example", score: 98, coverage: "full", last_paid: null, verdict: "not_delivered", delivered: false, requires_input: null };
+  const ok: ProbeLookup = { status: "scored", host: "ok.example", score: 99.5, coverage: "full", last_paid: { ts: "", url: "", network: null, amount: null, verdict: "delivered", tx: null }, verdict: "delivered", delivered: true, requires_input: null };
+  const un: ProbeLookup = { status: "unscored", host: "un.example" };
+  const all = [["ok.example", ok], ["nd.example", nd], ["un.example", un]] as const;
+  const payable = all.filter(([, l]) => gate(l)).map(([h]) => h);
+  assert.deepEqual(payable, ["ok.example"]);
+  const r = adjustThreshold(payable.map((h) => q(h, h)), new Map(payable.map((h) => [h, ok])), 99, 2, 85);
+  assert.equal(r.reason, "floor_reached");
+  assert.deepEqual(applyProbeFilter(payable.map((h) => q(h, h)), new Map(payable.map((h) => [h, ok])), r.effective).kept.map((k) => k.pubkey), ["ok.example"]);
+}
+
+// Base RPC: a 429 RPC is retried, then the next RPC answers; nothing is ever sent.
+{
+  const methods: string[] = [];
+  const serve = (handler: (body: any, res: any) => void) => new Promise<{ url: string; close: () => void; hits: () => number }>((resolve) => {
+    let hits = 0;
+    const srv = createServer((req, res) => {
+      let b = "";
+      req.on("data", (c) => (b += c));
+      req.on("end", () => { hits++; const j = JSON.parse(b); methods.push(j.method); handler(j, res); });
+    }).listen(0, "127.0.0.1", () => {
+      const { port } = srv.address() as any;
+      resolve({ url: `http://127.0.0.1:${port}`, close: () => srv.close(), hits: () => hits });
+    });
+  });
+  const limited = await serve((_j, res) => { res.writeHead(429, { "content-type": "application/json" }); res.end('{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"rate limit"}}'); });
+  const TX = "0x" + "ab".repeat(32);
+  const good = await serve((j, res) => {
+    const result = j.method === "eth_call" ? "0x" + "0".repeat(63) + "1"
+      : j.method === "eth_blockNumber" ? "0x1000"
+      : j.method === "eth_getLogs" ? [{ transactionHash: TX }]
+      : j.method === "eth_getTransactionReceipt" ? { status: "0x1", logs: [], blockNumber: "0x1000" } : null;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ jsonrpc: "2.0", id: j.id, result }));
+  });
+  const payer = { kind: "evm" as const, network: "eip155:8453", address: "0x" + "11".repeat(20), privateKey: "0x" as any, rpcUrl: "", usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as any };
+  const nonce = ("0x" + "cd".repeat(32)) as `0x${string}`;
+  const l = await findLandedEvm(payer, nonce, 5000, { urls: [limited.url, good.url], attempts: 3, delayMs: 10 });
+  assert.equal(l.status, "landed");
+  assert.equal((l as any).hash, TX);
+  assert.equal((l as any).rpc, new URL(good.url).host, "answered by the second RPC");
+  assert.ok(limited.hits() >= 3, "the 429 RPC was retried before switching");
+  // every RPC down → unknown (not 'failed'), still no send
+  const u = await findLandedEvm(payer, nonce, 300, { urls: [limited.url], attempts: 2, delayMs: 10 });
+  assert.equal(u.status, "unknown");
+  assert.ok(methods.every((m) => ["eth_call", "eth_blockNumber", "eth_getLogs", "eth_getTransactionReceipt"].includes(m)), "reads only; no transaction was (re)sent");
+  limited.close();
+  good.close();
 }
 console.log("probe checks passed");

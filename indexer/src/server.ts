@@ -288,10 +288,20 @@ app.get(
     const catalogs = await catalogByQuote();
     const recovered = await recoveredRfqs();
     const rfqs = new Map((await retry(() => prog.account.rfq.all(), "rfq.all")).map((r) => [r.publicKey.toBase58(), r.account]));
+    // min_probe_score per RFQ (catalog RFQs only; requested vs effective after the per-RFQ lowering)
+    const thr = new Map<string, Awaited<ReturnType<typeof rfqThreshold>>>();
+    await Promise.all([...new Set(quotes.filter((q) => catalogs.has(q.publicKey.toBase58())).map((q) => q.account.rfq.toBase58()))].map(async (k) => {
+      const r = rfqs.get(k);
+      thr.set(k, r ? await rfqThreshold(new PublicKey(k), STATUS[r.status]).catch(() => ({ requested: null, effective: null, reason: null })) : { requested: null, effective: null, reason: null });
+    }));
     let out = quotes.map((q) => {
       const awarded = rfqs.get(q.account.rfq.toBase58())?.awardedQuote?.equals(q.publicKey) ?? false;
+      const t = thr.get(q.account.rfq.toBase58());
       // recovered: 1 when this quote was awarded and its paid delivery was recovered by a re-request
-      return { ...quoteJson(q.publicKey, q.account, slas, catalogs), awarded, recovered: awarded && recovered.has(q.account.rfq.toBase58()) ? 1 : 0 };
+      return {
+        ...quoteJson(q.publicKey, q.account, slas, catalogs), awarded, recovered: awarded && recovered.has(q.account.rfq.toBase58()) ? 1 : 0,
+        requested_min_probe_score: t?.requested ?? null, effective_min_probe_score: t?.effective ?? null, threshold_reason: t?.reason ?? null,
+      };
     });
     const source = req.query.source as string | undefined;
     if (source) out = out.filter((q) => q.source === source);
@@ -350,6 +360,32 @@ async function recordExtras(pk: PublicKey, catalog?: CatalogInfo) {
     first_status: memo?.first_status ?? null,
     record_tx: tx,
   };
+}
+
+/**
+ * The threshold an RFQ actually used: our memo on its last record tx (fulfillment, rejection or
+ * cancel) carries min_req / min_eff / thr. Cached once the RFQ is in a final state.
+ */
+const thresholdCache = new Map<string, { requested: number | null; effective: number | null; reason: string | null }>();
+async function rfqThreshold(rfqPk: PublicKey, status: string) {
+  const k = rfqPk.toBase58();
+  if (thresholdCache.has(k)) return thresholdCache.get(k)!;
+  const none = { requested: null, effective: null, reason: null };
+  if (status === "open" || status === "awarded") return none;
+  const sigs = await retry(() => conn.getSignaturesForAddress(rfqPk, { limit: 10 }, "confirmed"), "getSignaturesForAddress");
+  let out = none as { requested: number | null; effective: number | null; reason: string | null };
+  for (const sg of sigs) {
+    const tx = await retry(() => conn.getParsedTransaction(sg.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }), "getParsedTransaction");
+    const m = (tx?.transaction.message.instructions ?? [])
+      .map((ix: any) => (ix.programId.equals(MEMO_PROGRAM_ID) && typeof ix.parsed === "string" ? parseRecordMemo(ix.parsed) : null))
+      .find(Boolean);
+    if (m) {
+      out = { requested: m.min_req ?? null, effective: m.min_eff ?? null, reason: m.thr ?? null };
+      break;
+    }
+  }
+  thresholdCache.set(k, out);
+  return out;
 }
 
 /** Fulfilled RFQs that were recovered by a re-request, keyed by rfq pubkey. */

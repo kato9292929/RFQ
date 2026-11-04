@@ -5,6 +5,9 @@
 # A seller that refuses our payment on a network is remembered as (host, network) for the rest of
 # the batch (BUYER_NET_FAILURES_FILE). Daily cap reached → quotes and award recorded, no payment.
 #   CONFIRM_MAINNET=yes MAINNET_RPC_URL=... MAINNET_BUYER_KEYPAIR='[...]' MAINNET_BUYER_BASE_KEY=0x... bash scripts/run-threshold.sh
+# THRESHOLDS="99" overrides the list; SPEC_EXTRA='{"min_candidates":2,"probe_score_floor":85}' is merged into
+# every spec; BATCH_KIND names the batch (default "threshold"); REPORT=auto writes the auto-threshold report.
+# Base payments the buyer could not confirm (settlement_unknown) are checked once more at the end.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [ "${CONFIRM_MAINNET:-}" = yes ] || { echo "refusing: set CONFIRM_MAINNET=yes (payments are in mainnet USDC)"; exit 1; }
@@ -14,9 +17,10 @@ export NODE_USE_ENV_PROXY=1 NO_PROXY="127.0.0.1,localhost" no_proxy="127.0.0.1,l
 export CLUSTER=devnet RPC_URL=https://api.devnet.solana.com X402_NETWORK=solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1
 export USDC_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU BUYER_KEYPAIR=.keys/buyer.json LOG_DIR=log
 export RUN_DIR=run/threshold INDEXER_PORT=8787 INDEXER_URL=http://127.0.0.1:8787 INDEXER_PUBLIC_URL=http://127.0.0.1:8787
-DAY=$(date -u +%Y%m%d); BATCH="threshold-$DAY-$(date -u +%H%M)"
+DAY=$(date -u +%Y%m%d); BATCH="${BATCH_KIND:-threshold}-$DAY-$(date -u +%H%M)"
 mkdir -p "$RUN_DIR/specs"
 export BUYER_NET_FAILURES_FILE="$RUN_DIR/net-failures-$BATCH.jsonl"; : > "$BUYER_NET_FAILURES_FILE"
+export BUYER_PENDING_FILE="$RUN_DIR/pending-$BATCH.jsonl"; : > "$BUYER_PENDING_FILE"
 for p in 8787 8810; do (exec 3<>/dev/tcp/127.0.0.1/$p) 2>/dev/null && { echo "port $p in use"; exit 1; }; done
 DEVNET_BUYER=$(solana-keygen pubkey .keys/buyer.json)
 if [ "$(solana -ud balance "$DEVNET_BUYER" --lamports | cut -d' ' -f1)" -lt 500000000 ]; then
@@ -33,15 +37,15 @@ curl -sSf -m 120 https://probe.x402jp.com/scores -o "$RUN_DIR/probe-scores.json"
 echo "batch $BATCH"
 
 CATS=scenarios/threshold-categories.json
-for T in $(node -pe "require('./$CATS').thresholds.join(' ')"); do
+for T in ${THRESHOLDS:-$(node -pe "require('./$CATS').thresholds.join(' ')")}; do
   for C in $(node -pe "require('./$CATS').categories.map(c=>c.name).join(' ')"); do
     specf="$RUN_DIR/specs/$C-$T.json"
     node -e '
-      const [cats, name, t, out] = process.argv.slice(1);
+      const [cats, name, t, out, extra] = process.argv.slice(1);
       const c = require(cats).categories.find((x) => x.name === name);
       const hosts = [...new Set(c.urls.map((u) => new URL(u).hostname.replace(/^www\./, "")))];
-      require("fs").writeFileSync(out, JSON.stringify({ category: "catalog", min_probe_score: Number(t), catalog_match: { hosts, urls: c.urls, max_price_usdc: 0.01 } }));
-    ' "$(pwd)/$CATS" "$C" "$T" "$specf"
+      require("fs").writeFileSync(out, JSON.stringify({ category: "catalog", min_probe_score: Number(t), ...JSON.parse(extra || "{}"), catalog_match: { hosts, urls: c.urls, max_price_usdc: 0.01 } }));
+    ' "$(pwd)/$CATS" "$C" "$T" "$specf" "${SPEC_EXTRA:-}"
     name="$BATCH-t$T-$C"; t0=$(date +%s)
     set +e
     BUYER_SCENARIO="$name" BUYER_SPEC_FILE="$specf" BUYER_MAX_PRICE=10000 BUYER_RFQ_WINDOW_SEC=40 \
@@ -53,6 +57,10 @@ for T in $(node -pe "require('./$CATS').thresholds.join(' ')"); do
     node --import tsx -e "import('./lib/common.ts').then(m=>m.appendLog({actor:'operator',step:'catalog_round',scenario:'$name',threshold:$T,category:'$C',exit:$r,wall_seconds:$secs}))"
   done
 done
+# payments left as settlement_unknown: one more check now, recorded on devnet if they landed
+[ -s "$BUYER_PENDING_FILE" ] && npx tsx scripts/resolve-pending.ts
 curl -s "$INDEXER_URL/sellers" > "$RUN_DIR/sellers-$BATCH.json"
-npx tsx scripts/run-threshold-report.ts "$BATCH" "log/run-$DAY.md" "$RUN_DIR/sellers-$BATCH.json"
+curl -s "$INDEXER_URL/quotes?source=catalog" > "$RUN_DIR/quotes-$BATCH.json"
+if [ "${REPORT:-}" = auto ]; then npx tsx scripts/run-auto-report.ts "$BATCH" "log/run-$DAY.md" "$RUN_DIR/quotes-$BATCH.json"
+else npx tsx scripts/run-threshold-report.ts "$BATCH" "log/run-$DAY.md" "$RUN_DIR/sellers-$BATCH.json"; fi
 echo "report: log/run-$DAY.md"
