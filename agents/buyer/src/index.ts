@@ -23,7 +23,7 @@ import {
   PROBE_URL, adjustThreshold, applyProbeFilter, checkMinProbeScore, lookupProbe, probeNoPayReason, type ProbeLookup, type ThresholdAdjust,
 } from "../../../lib/probe.js";
 import {
-  OWN_HOSTS, baseHosts, catalogSpentToday, netFailures, recordNetFailure, fetch402, hostOf, loadCatalog, loadPathOverrides, maxPerCall, maxPerDay, payHosts, pickAccept, retryAllowed, selectCatalogUrls,
+  OWN_HOSTS, activeRefusals, baseHosts, catalogSpentToday, netFailures, recordNetFailure, fetch402, hostOf, loadCatalog, loadPathOverrides, maxPerCall, maxPerDay, payHosts, pickAccept, retryAllowed, selectCatalogUrls,
   type CatalogMatch,
 } from "../../../lib/catalog.js";
 import {
@@ -116,8 +116,11 @@ if (catalogMatch) {
     const host = hostOf(url)!;
     const probe = await lookupProbe(url);
     const r = await fetch402(url);
-    // a network this host already refused our payment on (this batch) is not chosen again
-    const picked = r.ok ? pickAccept(r.accepts, [...payers.keys()], cap, refused.get(host) ?? []) : r;
+    // a network this host refused our payment on in the last 24 h (any batch) is not chosen again,
+    // unless Seller Probe has bought from the host since
+    const avoid = activeRefusals(refused.get(host), probe.status === "scored" ? probe.last_paid?.ts ?? null : null);
+    if (avoid.length) record("net_refusal_applied", { rfq: rfq.toBase58(), host, avoid, refusals: refused.get(host) });
+    const picked = r.ok ? pickAccept(r.accepts, [...payers.keys()], cap, avoid) : r;
     record("catalog_402", {
       rfq: rfq.toBase58(), url, host, ok: picked.ok, probe,
       ...(picked.ok ? { amount: picked.amount.toString(), pay_to: picked.payTo, network: picked.network, payable: picked.payable } : { reason: picked.reason }),

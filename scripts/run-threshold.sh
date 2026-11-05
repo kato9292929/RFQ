@@ -5,7 +5,7 @@
 # A seller that refuses our payment on a network is remembered as (host, network) for the rest of
 # the batch (BUYER_NET_FAILURES_FILE). Daily cap reached → quotes and award recorded, no payment.
 #   CONFIRM_MAINNET=yes MAINNET_RPC_URL=... MAINNET_BUYER_KEYPAIR='[...]' MAINNET_BUYER_BASE_KEY=0x... bash scripts/run-threshold.sh
-# THRESHOLDS="99" overrides the list; SPEC_EXTRA='{"min_candidates":2,"probe_score_floor":85}' is merged into
+# THRESHOLDS="99" / CATEGORIES="utility-ping" narrow the run; SPEC_EXTRA='{"min_candidates":2,"probe_score_floor":85}' is merged into
 # every spec; BATCH_KIND names the batch (default "threshold"); REPORT=auto writes the auto-threshold report.
 # Base payments the buyer could not confirm (settlement_unknown) are checked once more at the end.
 set -euo pipefail
@@ -38,7 +38,7 @@ echo "batch $BATCH"
 
 CATS=scenarios/threshold-categories.json
 for T in ${THRESHOLDS:-$(node -pe "require('./$CATS').thresholds.join(' ')")}; do
-  for C in $(node -pe "require('./$CATS').categories.map(c=>c.name).join(' ')"); do
+  for C in ${CATEGORIES:-$(node -pe "require('./$CATS').categories.map(c=>c.name).join(' ')")}; do
     specf="$RUN_DIR/specs/$C-$T.json"
     node -e '
       const [cats, name, t, out, extra] = process.argv.slice(1);
