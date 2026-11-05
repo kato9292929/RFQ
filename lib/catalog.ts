@@ -194,23 +194,56 @@ export function catalogSpentToday(): bigint {
 }
 
 
+export type NetRefusal = { host: string; network: string; ts: string; source: string };
+export const NET_REFUSAL_TTL_MS = 24 * 3600_000;
+
 /**
  * (host, network) pairs where a seller refused our payment (it answered 402 again and no payment
- * landed). One JSON line per failure in BUYER_NET_FAILURES_FILE, shared by a batch's buyer runs;
- * later RFQs in the batch pick another network for that host, or drop the host.
+ * landed). Kept across batches: read from the append-only run log (`net_failure` steps in
+ * log/YYYY-MM-DD.jsonl, today and the day before) and from BUYER_NET_FAILURES_FILE (one batch's
+ * extra lines, incl. hand-recorded ones). Use activeRefusals() to apply the expiry.
  */
-export function netFailures(file = process.env.BUYER_NET_FAILURES_FILE): Map<string, string[]> {
-  const m = new Map<string, string[]>();
-  if (!file || !existsSync(file)) return m;
-  for (const line of readFileSync(file, "utf8").split("\n")) {
-    try {
-      const r = JSON.parse(line);
-      if (r.host && r.network) m.set(r.host, [...new Set([...(m.get(r.host) ?? []), r.network])]);
-    } catch {
-      /* skip */
+export function netFailures(file = process.env.BUYER_NET_FAILURES_FILE, now = Date.now()): Map<string, NetRefusal[]> {
+  const m = new Map<string, NetRefusal[]>();
+  const add = (r: any, source: string) => {
+    if (!r?.host || !r?.network || !r?.ts) return;
+    m.set(r.host, [...(m.get(r.host) ?? []), { host: r.host, network: r.network, ts: r.ts, source }]);
+  };
+  const dir = resolve(ROOT, process.env.LOG_DIR ?? "log");
+  for (const d of [0, 1].map((k) => new Date(now - k * 86_400_000).toISOString().slice(0, 10))) {
+    const f = resolve(dir, `${d}.jsonl`);
+    if (!existsSync(f)) continue;
+    for (const line of readFileSync(f, "utf8").split("\n")) {
+      if (!line.includes('"net_failure"')) continue;
+      try {
+        const r = JSON.parse(line);
+        if (r.step === "net_failure") add(r, `log/${d}.jsonl`);
+      } catch {
+        /* skip */
+      }
     }
   }
+  if (file && existsSync(file))
+    for (const line of readFileSync(file, "utf8").split("\n")) {
+      try {
+        add(JSON.parse(line), file);
+      } catch {
+        /* skip */
+      }
+    }
   return m;
+}
+
+/**
+ * Networks still to avoid for a host: refusals younger than 24 h, unless Seller Probe has measured
+ * the host (a paid purchase) after the refusal — a fresh measurement ends the avoidance early.
+ */
+export function activeRefusals(refusals: NetRefusal[] = [], probeLastPaidTs: string | null = null, now = Date.now(), ttlMs = NET_REFUSAL_TTL_MS): string[] {
+  const probeT = probeLastPaidTs ? Date.parse(probeLastPaidTs) : -Infinity;
+  return [...new Set(refusals.filter((r) => {
+    const t = Date.parse(r.ts);
+    return now - t < ttlMs && !(probeT > t);
+  }).map((r) => r.network))];
 }
 
 export function recordNetFailure(host: string, network: string, detail: Record<string, unknown>, file = process.env.BUYER_NET_FAILURES_FILE): void {

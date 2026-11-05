@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { adjustThreshold, applyProbeFilter, probeNoPayReason, type ProbeLookup } from "../lib/probe.js";
 import { findLandedEvm } from "../lib/evm-pay.js";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { baseHosts, netFailures, payHosts, pickAccept, recordNetFailure } from "../lib/catalog.js";
+import { activeRefusals, baseHosts, netFailures, payHosts, pickAccept, recordNetFailure } from "../lib/catalog.js";
 
 const scored = (host: string, score: number): ProbeLookup =>
   ({ status: "scored", host, score, coverage: "full", last_paid: null, verdict: null, delivered: false, requires_input: null });
@@ -57,16 +57,34 @@ assert.deepEqual(applyProbeFilter(quotes, lookups, 50).excluded.map((e) => e.quo
     { scheme: "exact", network: BASE, asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0xB", amount: "1000" },
   ];
   assert.equal((pickAccept(accepts, [SOL, BASE], 10_000n) as any).network, SOL, "Solana first by default");
-  const file = join(mkdtempSync(join(tmpdir(), "rfq-net-")), "failures.jsonl");
-  assert.equal(netFailures(file).size, 0);
-  recordNetFailure("x402helper.xyz", SOL, { rfq: "R" }, file);
-  const avoid = netFailures(file).get("x402helper.xyz")!;
+  // refusals are read from the append-only run log (net_failure steps), so they outlive a batch
+  const logDir = mkdtempSync(join(tmpdir(), "rfq-log-"));
+  const savedLogDir = process.env.LOG_DIR;
+  process.env.LOG_DIR = logDir;
+  const now = Date.parse("2026-11-05T06:00:00Z");
+  writeFileSync(join(logDir, "2026-11-04.jsonl"), [
+    { ts: "2026-11-04T10:18:36Z", step: "net_failure", host: "x402helper.xyz", network: SOL },
+    { ts: "2026-11-04T10:00:00Z", step: "x402_paid", host: "other.example" },
+  ].map((r) => JSON.stringify(r)).join("\n") + "\n");
+  writeFileSync(join(logDir, "2026-11-02.jsonl"), JSON.stringify({ ts: "2026-11-02T12:47:26Z", step: "net_failure", host: "x402helper.xyz", network: BASE }) + "\n");
+  const file = join(logDir, "batch-failures.jsonl");
+  const seen = netFailures(file, now).get("x402helper.xyz")!;
+  assert.deepEqual(seen.map((r) => r.network), [SOL], "yesterday's refusal carried into a new batch; 3-day-old log not read");
+  let avoid = activeRefusals(seen, null, now);
   assert.deepEqual(avoid, [SOL]);
-  assert.equal((pickAccept(accepts, [SOL, BASE], 10_000n, avoid) as any).network, BASE, "next RFQ in the batch pays on Base");
+  assert.equal((pickAccept(accepts, [SOL, BASE], 10_000n, avoid) as any).network, BASE, "a new batch pays on Base");
+  // expiry: 24 h, or earlier when Seller Probe has bought from the host since the refusal
+  assert.deepEqual(activeRefusals(seen, null, Date.parse("2026-11-05T10:30:00Z")), [], "older than 24 h → expired");
+  assert.deepEqual(activeRefusals(seen, "2026-11-04T20:00:00Z", now), [], "Probe re-measured after the refusal → expired");
+  assert.deepEqual(activeRefusals(seen, "2026-11-02T04:22:16Z", now), [SOL], "Probe's measurement before the refusal does not end it");
   const solOnly = [accepts[0]];
   assert.match((pickAccept(solOnly, [SOL, BASE], 10_000n, avoid) as any).reason, /refused earlier/, "no other network offered → host dropped");
+  // a batch file adds to the log (e.g. a hand-recorded refusal)
   recordNetFailure("x402helper.xyz", BASE, { rfq: "R2" }, file);
-  assert.match((pickAccept(accepts, [SOL, BASE], 10_000n, netFailures(file).get("x402helper.xyz")) as any).reason, /refused earlier/);
+  avoid = activeRefusals(netFailures(file).get("x402helper.xyz"), null);
+  assert.ok(avoid.includes(BASE));
+  assert.match((pickAccept(accepts, [SOL, BASE], 10_000n, avoid) as any).reason, /refused earlier/);
+  if (savedLogDir === undefined) delete process.env.LOG_DIR; else process.env.LOG_DIR = savedLogDir;
 }
 // Per-RFQ lowering of min_probe_score (requested 99, min_candidates 2, floor 85)
 {
