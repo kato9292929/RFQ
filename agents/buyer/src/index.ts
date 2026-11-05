@@ -4,7 +4,7 @@
 // Records go to the RFQ program's cluster; a catalog seller is paid on the network its
 // own 402 names (Solana mainnet USDC from MAINNET_BUYER_KEYPAIR, see lib/payment-net.ts).
 import { randomInt } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import anchor from "@coral-xyz/anchor";
 import bs58 from "bs58";
@@ -19,9 +19,11 @@ import {
   REASONS, appendLog, buyerSignatureFromPayload, connection, env, explorerTx, findLandedPayment, fmtUsdc, loadKeypair, pdas, program, retry, sha256, sleep,
   type Reason,
 } from "../../../lib/common.js";
-import { PROBE_URL, applyProbeFilter, checkMinProbeScore, lookupProbe, probeNoPayReason, type ProbeLookup } from "../../../lib/probe.js";
 import {
-  OWN_HOSTS, baseHosts, catalogSpentToday, fetch402, hostOf, loadCatalog, loadPathOverrides, maxPerCall, maxPerDay, payHosts, pickAccept, retryAllowed, selectCatalogUrls,
+  PROBE_URL, adjustThreshold, applyProbeFilter, checkMinProbeScore, lookupProbe, probeNoPayReason, type ProbeLookup, type ThresholdAdjust,
+} from "../../../lib/probe.js";
+import {
+  OWN_HOSTS, baseHosts, catalogSpentToday, netFailures, recordNetFailure, fetch402, hostOf, loadCatalog, loadPathOverrides, maxPerCall, maxPerDay, payHosts, pickAccept, retryAllowed, selectCatalogUrls,
   type CatalogMatch,
 } from "../../../lib/catalog.js";
 import {
@@ -41,6 +43,13 @@ let specText = process.env.BUYER_SPEC_FILE
 
 // Fail before posting anything if the optional Probe threshold is malformed.
 const MIN_PROBE_SCORE = checkMinProbeScore(JSON.parse(specText).min_probe_score);
+// Per-RFQ lowering of min_probe_score when too few payable quotes pass (lib/probe.ts adjustThreshold).
+const MIN_CANDIDATES = (() => {
+  const v = JSON.parse(specText).min_candidates ?? 2;
+  if (!Number.isInteger(v) || v < 1) throw new Error(`min_candidates must be an integer ≥ 1, got ${JSON.stringify(v)}`);
+  return v as number;
+})();
+const PROBE_SCORE_FLOOR = checkMinProbeScore(JSON.parse(specText).probe_score_floor ?? 85)!;
 
 const prog = program(kp);
 const P = pdas(prog.programId);
@@ -102,11 +111,13 @@ if (catalogMatch) {
   log(`catalog: ${urls.length} endpoint(s) from ${catalogMatch.urls?.length ? "the spec's urls" : catalog.source} (cap ${fmtUsdc(cap)} USDC per call)`);
   type Best = { url: string; amount: bigint; payTo: string; network: string; payable: boolean; probe: ProbeLookup };
   const best = new Map<string, Best>();
+  const refused = netFailures();
   for (const url of urls) {
     const host = hostOf(url)!;
     const probe = await lookupProbe(url);
     const r = await fetch402(url);
-    const picked = r.ok ? pickAccept(r.accepts, [...payers.keys()], cap) : r;
+    // a network this host already refused our payment on (this batch) is not chosen again
+    const picked = r.ok ? pickAccept(r.accepts, [...payers.keys()], cap, refused.get(host) ?? []) : r;
     record("catalog_402", {
       rfq: rfq.toBase58(), url, host, ok: picked.ok, probe,
       ...(picked.ok ? { amount: picked.amount.toString(), pay_to: picked.payTo, network: picked.network, payable: picked.payable } : { reason: picked.reason }),
@@ -168,37 +179,47 @@ record("catalog_pay_hosts", { rfq: rfq.toBase58(), pay_hosts: allowedPayHosts, p
 // Catalog payment limits, enforced here and again right before signing.
 const spentToday = catalogSpentToday();
 const nowS = Math.floor(Date.now() / 1000);
-const excluded: { quote: string; seller: string; why: string }[] = [];
+// Every exclusion carries a code (for the run report) and a human-readable reason.
+const excluded: { quote: string; seller: string; code: string; why: string }[] = [];
 let eligible = (detail.quotes as any[]).filter((q) => {
-  const why =
-    q.expires_at <= nowS + 30 ? "quote expires too soon"
-    : !q.endpoint_hash_ok ? "endpoint_hash does not match endpoint_uri"
-    : BigInt(q.price) > MAX_PRICE ? "price above max_price"
-    : spec.max_latency_ms !== undefined && !q.sla ? `no SLA declared (spec max_latency_ms=${spec.max_latency_ms})`
+  const [code, why] =
+    q.expires_at <= nowS + 30 ? ["expires_soon", "quote expires too soon"]
+    : !q.endpoint_hash_ok ? ["endpoint_hash", "endpoint_hash does not match endpoint_uri"]
+    : BigInt(q.price) > MAX_PRICE ? ["above_max_price", "price above max_price"]
+    : spec.max_latency_ms !== undefined && !q.sla ? ["no_sla", `no SLA declared (spec max_latency_ms=${spec.max_latency_ms})`]
     : spec.max_latency_ms !== undefined && q.sla.max_latency_ms > spec.max_latency_ms
-      ? `SLA ${q.sla.max_latency_ms}ms > spec max_latency_ms=${spec.max_latency_ms}`
+      ? ["sla_too_slow", `SLA ${q.sla.max_latency_ms}ms > spec max_latency_ms=${spec.max_latency_ms}`]
     : q.source === "catalog" && !payers.has(q.catalog?.network)
-      ? `catalog quote on ${q.catalog?.network}: this buyer does not pay on that network (recorded only)`
+      ? ["not_payable_network", `catalog quote on ${q.catalog?.network}: this buyer does not pay on that network (recorded only)`]
     : q.source === "catalog" && !allowedPayHosts.includes(q.catalog?.host)
-      ? `catalog host ${q.catalog?.host} not paid: ${probeNoPay[q.catalog?.host] ?? "not ours and not delivered in Seller Probe"} (recorded only)`
-    : q.source === "catalog" && BigInt(q.price) > maxPerCall() ? `catalog price above per-call cap ${fmtUsdc(maxPerCall())}`
-    : q.source === "catalog" && spentToday + BigInt(q.price) > maxPerDay()
-      ? `catalog daily cap: spent ${fmtUsdc(spentToday)} + ${q.price_usdc} > ${fmtUsdc(maxPerDay())}`
-    : "";
-  if (why) excluded.push({ quote: q.pubkey, seller: q.seller, why });
-  return !why;
+      ? ["not_payable_host", `catalog host ${q.catalog?.host} not paid: ${probeNoPay[q.catalog?.host] ?? "not ours and not delivered in Seller Probe"} (recorded only)`]
+    : q.source === "catalog" && BigInt(q.price) > maxPerCall() ? ["above_per_call_cap", `catalog price above per-call cap ${fmtUsdc(maxPerCall())}`]
+    : ["", ""];
+  // The daily cap is not an exclusion: the RFQ is still awarded, and the payment is refused
+  // right before signing (see below), so quotes and the award stay on record.
+  if (code) excluded.push({ quote: q.pubkey, seller: q.seller, code, why });
+  return !code;
 });
 
 // Seller quality gate (x402 Seller Probe). Applied after the price/SLA checks, before the tie-break.
 let probeFilter: Record<string, unknown> | null = null;
+let thresholdAdjust: ThresholdAdjust | null = null;
+let effectiveMin = MIN_PROBE_SCORE;
 if (MIN_PROBE_SCORE !== undefined && eligible.length) {
   const lookups = new Map<string, ProbeLookup>(await Promise.all(eligible.map(async (q) => [q.pubkey, await lookupProbe(q.endpoint_uri)] as const)));
+  // Too few payable quotes at the requested score → lower it for this RFQ, never below the floor.
+  // `eligible` already passed the payment gate, so lowering cannot let an unpaid-for kind of seller in.
+  thresholdAdjust = adjustThreshold(eligible, lookups, MIN_PROBE_SCORE, MIN_CANDIDATES, PROBE_SCORE_FLOOR, baseHosts());
+  effectiveMin = thresholdAdjust.effective;
+  record("threshold_adjust", { rfq: rfq.toBase58(), requested_min_probe_score: MIN_PROBE_SCORE, effective_min_probe_score: effectiveMin, ...thresholdAdjust });
+  if (thresholdAdjust.reason !== "none")
+    log(`min_probe_score ${MIN_PROBE_SCORE} → ${effectiveMin} (${thresholdAdjust.reason}: ${thresholdAdjust.passing_at_requested} → ${thresholdAdjust.passing_at_effective} candidate(s), need ${MIN_CANDIDATES}, floor ${thresholdAdjust.floor})`);
   // Our own hosts are already allowlisted for payment; an outside score does not gate them.
-  const r = applyProbeFilter(eligible, lookups, MIN_PROBE_SCORE, baseHosts());
+  const r = applyProbeFilter(eligible, lookups, effectiveMin!, baseHosts());
   eligible = r.kept;
-  excluded.push(...r.excluded);
+  excluded.push(...r.excluded.map((e) => ({ ...e, code: "below_min_probe_score" })));
   probeFilter = {
-    probe_url: PROBE_URL(), min_probe_score: MIN_PROBE_SCORE,
+    probe_url: PROBE_URL(), min_probe_score: effectiveMin, requested_min_probe_score: MIN_PROBE_SCORE,
     lookups: [...lookups].map(([quote, l]) => ({ quote, ...l })),
     excluded: r.excluded,
     probe_unscored: r.unscored,
@@ -210,6 +231,12 @@ if (MIN_PROBE_SCORE !== undefined && eligible.length) {
   if (r.unscored.length) log(`probe_unscored for ${r.unscored.length} quote(s) — kept (no score is not below the minimum)`);
   if (r.unavailable.length) log(`probe_unavailable for ${r.unavailable.length} quote(s) — kept, selection proceeds as before`);
   if (r.excluded.length) log(`probe excluded: ${r.excluded.map((e) => `${e.seller.slice(0, 6)} (${e.why})`).join(", ")}`);
+}
+
+/** requested / effective min_probe_score for the record tx's memo (only when a threshold applied). */
+function thresholdMemo(): Pick<RecordMemo, "min_req" | "min_eff" | "thr"> {
+  if (MIN_PROBE_SCORE === undefined) return {};
+  return { min_req: MIN_PROBE_SCORE, min_eff: effectiveMin, thr: thresholdAdjust?.reason ?? "none" };
 }
 
 /** Slot of the transaction that created the quote (oldest signature touching the PDA). */
@@ -239,6 +266,32 @@ if (eligible.length) {
     };
   }
 }
+// One line per quote: kept or excluded, why, and its Probe score (for the threshold report).
+{
+  const probeTags = new Map<string, string>();
+  for (const e of (probeFilter?.probe_exempt as any[]) ?? []) probeTags.set(e.quote, "probe_exempt");
+  for (const e of (probeFilter?.probe_unscored as any[]) ?? []) probeTags.set(e.quote, "probe_unscored");
+  for (const e of (probeFilter?.probe_unavailable as any[]) ?? []) probeTags.set(e.quote, "probe_unavailable");
+  const decisions = [];
+  for (const q of detail.quotes as any[]) {
+    const l = await lookupProbe(q.endpoint_uri);
+    const ex = excluded.find((e) => e.quote === q.pubkey);
+    decisions.push({
+      quote: q.pubkey, host: q.catalog?.host ?? null, price: q.price, network: q.catalog?.network ?? null,
+      probe_status: l.status, probe_score: l.status === "scored" ? l.score : null, probe_verdict: l.status === "scored" ? l.verdict : null,
+      decision: ex ? "excluded" : "kept", code: ex?.code ?? probeTags.get(q.pubkey) ?? "kept", why: ex?.why ?? null,
+      // the Probe's view even when another check excluded the quote first
+      probe_tag: OWN_HOSTS.includes(q.catalog?.host) || baseHosts().includes(q.catalog?.host) ? "probe_exempt"
+        : l.status === "unscored" || (l.status === "scored" && l.score === null) ? "probe_unscored"
+        : l.status === "unavailable" ? "probe_unavailable"
+        : effectiveMin !== undefined && l.status === "scored" && (l.score ?? 0) < effectiveMin ? "below_min_probe_score" : "scored_ok",
+    });
+  }
+  record("quote_decisions", {
+    rfq: rfq.toBase58(), min_probe_score: effectiveMin ?? null, requested_min_probe_score: MIN_PROBE_SCORE ?? null,
+    threshold_reason: thresholdAdjust?.reason ?? null, decisions,
+  });
+}
 record("quotes_collected", {
   rfq: rfq.toBase58(),
   quotes: detail.quotes.map((q: any) => ({
@@ -251,7 +304,7 @@ record("quotes_collected", {
 });
 if (!win) {
   log(`no valid quotes — cancelling RFQ${excluded.length ? ` (excluded: ${excluded.map((e) => e.why).join("; ")})` : ""}`);
-  const sig = await prog.methods.cancelRfq().accountsPartial({ buyer: me, rfq }).rpc();
+  const sig = await prog.methods.cancelRfq().accountsPartial({ buyer: me, rfq }).postInstructions([memoInstruction({ ...thresholdMemo() })]).rpc();
   record("cancel_rfq", { rfq: rfq.toBase58(), excluded, tx: sig, explorer: explorerTx(sig) });
   process.exit(2);
 }
@@ -320,7 +373,8 @@ if (isCatalog) {
   const spent = catalogSpentToday();
   if (BigInt(win.price) > maxPerCall() || spent + BigInt(win.price) > maxPerDay()) {
     record("catalog_cap_refused", { rfq: rfq.toBase58(), price: win.price, spent_today: spent.toString(), max_per_call: maxPerCall().toString(), max_per_day: maxPerDay().toString() });
-    throw new Error(`catalog cap: price ${win.price}, spent today ${spent} (per call ${maxPerCall()}, per day ${maxPerDay()})`);
+    log(`catalog cap: price ${win.price}, spent today ${spent} (per call ${maxPerCall()}, per day ${maxPerDay()}) — awarded, not paid`);
+    process.exit(5); // quotes and the award stay on record; no payment
   }
 }
 const payload = await http.createPaymentPayload(required);
@@ -332,14 +386,33 @@ record("x402_payment_sent", {
   rfq: rfq.toBase58(), seller: win.seller, pay_to: payTo, network, payer: payer.address, amount: win.price,
   source: win.source ?? "seller", host: win.catalog?.host ?? null, buyer_signature: buyerPaymentSig,
 });
-const memoBase: RecordMemo = { pay_net: network, payer: payer.address };
+const memoBase: RecordMemo = { pay_net: network, payer: payer.address, ...thresholdMemo() };
 const payExplorer = (sig: string) => explorerFor(network, sig);
 
-/** The landed payment carrying our signature / authorization, if any. */
-async function findLanded(p: Payer): Promise<{ tx: string; ok: boolean } | null> {
+/** RPC that answered the last landing check (Base), for the run report. */
+let verifyRpc: string | null = null;
+
+/**
+ * The landed payment carrying our signature / authorization, if any. On Base, when no RPC can
+ * tell (all rate-limited / down) or the authorization is used but its tx is not found yet, the
+ * payment is NOT treated as failed: it is written to BUYER_PENDING_FILE as settlement_unknown,
+ * nothing is re-sent, and scripts/resolve-pending.ts settles the record at the end of the batch.
+ */
+async function findLanded(p: Payer, ctx: { http_status: number; delivered: boolean }): Promise<{ tx: string; ok: boolean } | null> {
   if (p.kind === "evm") {
     const l = await findLandedEvm(p, buyerPaymentSig as `0x${string}`);
-    return l ? { tx: l.hash, ok: l.ok } : null;
+    if (l.status !== "unknown") verifyRpc = l.rpc;
+    if (l.status === "not_landed") return null;
+    if (l.status === "landed" && l.hash) return { tx: l.hash, ok: l.ok };
+    const pending = {
+      rfq: rfq.toBase58(), quote: win.pubkey, host, network, payer: p.address, nonce: buyerPaymentSig, pay_to: payTo, price: win.price,
+      http_status: ctx.http_status, delivered: ctx.delivered, response_sha256: sha256(bodyBytes).toString("hex"),
+      verdict: ctx.delivered ? accept() : null, first_check: l.status === "unknown" ? { errors: l.errors.slice(-4) } : { used: true, tx: "not found yet" },
+    };
+    record("settlement_unknown", pending);
+    if (process.env.BUYER_PENDING_FILE) appendFileSync(process.env.BUYER_PENDING_FILE, JSON.stringify({ ts: new Date().toISOString(), scenario: SCENARIO, ...pending }) + "\n");
+    log("settlement_unknown: could not confirm whether the payment landed; not re-sent, left for the end-of-batch check");
+    process.exit(6);
   }
   const l = await findLandedPayment(p.conn, getAssociatedTokenAddressSync(p.usdcMint, p.keypair.publicKey), buyerPaymentSig);
   return l ? { tx: l.signature, ok: !l.err } : null;
@@ -372,13 +445,19 @@ if (paid.status !== 200) {
   // the transfer after the seller's /settle wait expired, so check the chain for the
   // tx carrying our signature before concluding we did not pay.
   log(`paid request returned ${paid.status}; looking for the payment tx with buyer signature ${buyerPaymentSig.slice(0, 12)}… on ${network}`);
-  const landed = await findLanded(payer);
+  const landed = await findLanded(payer, { http_status: paid.status, delivered: false });
   record("x402_paid_request_failed", {
     rfq: rfq.toBase58(), seller: win.seller, http_status: paid.status, body: bodyBytes.toString("utf8").slice(0, 400),
     latency_ms: latencyMs, network, buyer_signature: buyerPaymentSig, landed_payment_tx: landed?.tx ?? null, landed_ok: landed?.ok ?? null,
   });
   if (!landed || !landed.ok) {
     log("no landed payment found — nothing paid, nothing delivered; RFQ stays awarded");
+    // The seller answered 402 again to a valid payment on this network: remember (host, network)
+    // so later RFQs in the batch pay this host on another network, or drop it.
+    if (paid.status === 402 && isCatalog) {
+      recordNetFailure(host, network, { rfq: rfq.toBase58(), buyer_signature: buyerPaymentSig });
+      record("net_failure", { rfq: rfq.toBase58(), host, network, http_status: paid.status });
+    }
     process.exit(1);
   }
   // Paid, not delivered. Our own sellers and local test sellers may be asked once more with
@@ -432,7 +511,7 @@ if (paid.status !== 200) {
   else {
     // 200 without a settlement header: look on chain before deciding nothing was paid.
     log(`200 without a settlement result; looking for the payment on ${network}`);
-    const landed = await findLanded(payer);
+    const landed = await findLanded(payer, { http_status: paid.status, delivered: true });
     record("x402_settlement_missing", { rfq: rfq.toBase58(), host, settle, landed_payment_tx: landed?.tx ?? null, landed_ok: landed?.ok ?? null });
     paymentTx = landed?.ok ? landed.tx : null;
   }
@@ -446,7 +525,7 @@ log(withoutSettlement
 record(withoutSettlement ? "x402_delivered_without_settlement" : "x402_paid", {
   rfq: rfq.toBase58(), seller: win.seller, amount: win.price, amount_usdc: win.price_usdc, network,
   payment_tx: paymentTx, explorer: paymentTx ? payExplorer(paymentTx) : null, payer: payer.address,
-  response_sha256: responseHash.toString("hex"), response_bytes: bodyBytes.length, latency_ms: latencyMs, recovered: !!recovered,
+  response_sha256: responseHash.toString("hex"), response_bytes: bodyBytes.length, latency_ms: latencyMs, recovered: !!recovered, verify_rpc: verifyRpc,
   response_preview: bodyBytes.toString("utf8").slice(0, 400),
 });
 

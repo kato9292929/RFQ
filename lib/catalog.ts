@@ -1,6 +1,6 @@
 // Catalog quotes: turn x402 Endpoint catalog entries into quotes by reading each
 // endpoint's own 402 price. Sellers implement nothing; the buyer records the quote.
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { ROOT } from "./common.js";
@@ -139,10 +139,15 @@ export type Picked = { ok: true; amount: bigint; payTo: string; network: string;
  * otherwise returns a recognised USDC option elsewhere (e.g. Base) with payable=false, which is
  * recorded as a quote but never paid.
  */
-export function pickAccept(accepts: Accept[], payable: string[], max: bigint): Picked {
-  const exact = accepts.filter((a) => a.scheme === "exact");
+export function pickAccept(accepts: Accept[], payable: string[], max: bigint, avoid: string[] = []): Picked {
+  // `avoid`: networks this seller already refused a payment on (same batch). Never chosen again.
+  const all = accepts.filter((a) => a.scheme === "exact");
+  const exact = all.filter((a) => !avoid.includes(a.network));
+  if (all.length && !exact.length) return { ok: false, reason: `payment refused earlier on ${avoid.join(", ")} and no other network offered` };
   if (!exact.length) return { ok: false, reason: "no exact scheme offered" };
   const usdc = exact.filter((a) => USDC_BY_NETWORK[a.network] !== undefined && a.asset?.toLowerCase() === USDC_BY_NETWORK[a.network].toLowerCase());
+  if (!usdc.length && all.some((a) => avoid.includes(a.network)))
+    return { ok: false, reason: `payment refused earlier on ${[...new Set(all.filter((a) => avoid.includes(a.network)).map((a) => a.network))].join(", ")}; no other payable network offered` };
   if (!usdc.length) return { ok: false, reason: `no USDC option on a known network (offered: ${[...new Set(exact.map((a) => a.network))].join(", ")})` };
   const problems: string[] = [];
   const ok: Extract<Picked, { ok: true }>[] = [];
@@ -155,7 +160,10 @@ export function pickAccept(accepts: Accept[], payable: string[], max: bigint): P
     if (!a.payTo) { problems.push("no payTo"); continue; }
     ok.push({ ok: true, amount, payTo: a.payTo, network: a.network, payable: payable.includes(a.network) });
   }
-  if (!ok.length) return { ok: false, reason: [...new Set(problems)].join("; ") };
+  const avoided = all.filter((a) => avoid.includes(a.network)).map((a) => a.network);
+  if (!ok.length && avoided.length) return { ok: false, reason: `payment refused earlier on ${[...new Set(avoided)].join(", ")}; no other payable network offered` };
+  if (!ok.length) return { ok: false, reason: [...new Set(problems)].join("; ") || "no usable option" };
+  if (avoid.length && !ok.some((o) => o.payable)) return { ok: false, reason: `payment refused earlier on ${avoid.join(", ")}; no other payable network offered` };
   ok.sort((x, y) => Number(y.payable) - Number(x.payable) || payable.indexOf(x.network) - payable.indexOf(y.network) || (x.amount < y.amount ? -1 : 1));
   return ok[0];
 }
@@ -185,3 +193,27 @@ export function catalogSpentToday(): bigint {
   return sum;
 }
 
+
+/**
+ * (host, network) pairs where a seller refused our payment (it answered 402 again and no payment
+ * landed). One JSON line per failure in BUYER_NET_FAILURES_FILE, shared by a batch's buyer runs;
+ * later RFQs in the batch pick another network for that host, or drop the host.
+ */
+export function netFailures(file = process.env.BUYER_NET_FAILURES_FILE): Map<string, string[]> {
+  const m = new Map<string, string[]>();
+  if (!file || !existsSync(file)) return m;
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    try {
+      const r = JSON.parse(line);
+      if (r.host && r.network) m.set(r.host, [...new Set([...(m.get(r.host) ?? []), r.network])]);
+    } catch {
+      /* skip */
+    }
+  }
+  return m;
+}
+
+export function recordNetFailure(host: string, network: string, detail: Record<string, unknown>, file = process.env.BUYER_NET_FAILURES_FILE): void {
+  if (!file) return;
+  appendFileSync(file, JSON.stringify({ ts: new Date().toISOString(), host, network, ...detail }) + "\n");
+}

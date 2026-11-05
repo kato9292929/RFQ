@@ -1,0 +1,27 @@
+{
+  "_note": "Catalog fields with several sellers of the same kind of data (x402scan / x402 Endpoint catalog, paths Seller Probe paid for). Each mixes high Probe scores, low ones (≈88-97) and an unscored host (the devnet mock seller at 127.0.0.1, never paid: not ours and not measured). URLs are submitted in this order, so with equal prices the first one has the earliest slot. At most 5 URLs per RFQ (lib/catalog.ts).",
+  "categories": [
+    { "name": "social-trends", "urls": [
+      "https://glim.sh/api/v1/twitter/trends", "https://surf.cascade.fyi/api/v1/twitter/trends",
+      "https://fetcher.sh/api/reddit/posts/hot", "http://127.0.0.1:8810/api/paid" ] },
+    { "name": "gas-fees", "urls": [
+      "https://vibesprings.net/api/gas", "https://api.marketintelligenceapi.com/api/v1/markets/gas-price",
+      "https://x402-datashop-production.up.railway.app/v1/btc/fees", "http://127.0.0.1:8810/api/paid" ] },
+    { "name": "news", "urls": [
+      "https://polynews.news/api/v1/feed", "https://crypto-market-data.zafermemon87.workers.dev/v1/news",
+      "https://api.webintel-api.workers.dev/api/search/cnbc", "https://agent.massive.com/v2/reference/news", "http://127.0.0.1:8810/api/paid" ] },
+    { "name": "crypto-market", "urls": [
+      "https://crypto.apitoll.cloud/v1/crypto/dex", "https://intel.degenscan.io/v1/pulse",
+      "https://claw402.ai/api/v1/nofx/upbit/hot", "https://defi.hugen.tokyo/defi/chains", "http://127.0.0.1:8810/api/paid" ] },
+    { "name": "fx-rates", "urls": [
+      "https://toll402.dev/v1/fx", "https://api.printmoneylab.com/api/v1/fx-rate",
+      "https://agent-tools.jbarkules.workers.dev/v1/fx/rates", "https://api.sitecheck-api.workers.dev/api/fx", "http://127.0.0.1:8810/api/paid" ] },
+    { "name": "market-briefs-own", "urls": [
+      "https://osd.x402jp.com/api/catalyst/NVDA", "https://jin.x402jp.com/api/jin/series",
+      "https://x402stock.xyz/api/v1/gdp", "https://straits.live/api/premium/brief", "https://api.signalis.dev/v1/pulse/narratives" ] },
+    { "name": "utility-ping", "urls": [
+      "https://x402helper.xyz/test-billing", "https://onchaincheck.dev/x402/ping",
+      "https://markets.losbeto.xyz/ping402", "https://time.24klabs.ai/time", "http://127.0.0.1:8810/api/paid" ] }
+  ],
+  "thresholds": [0, 90, 95, 99]
+}

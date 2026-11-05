@@ -157,3 +157,34 @@ export function applyProbeFilter<Q extends { pubkey: string; seller: string; cat
   }
   return { kept, excluded, unscored, unavailable, exempt };
 }
+
+export type ThresholdAdjust = {
+  requested: number; effective: number; min_candidates: number; floor: number;
+  reason: "none" | "lowered" | "floor_reached"; passing_at_requested: number; passing_at_effective: number;
+};
+
+/**
+ * Per-RFQ threshold: if fewer than `minCandidates` payable quotes pass `requested`, lower it to the
+ * highest score that keeps `minCandidates` of them, never below `floor`. If even `floor` keeps too
+ * few, use `floor` and award among what is left. Run it on quotes that already passed the payment
+ * gate (Probe verdict 納品, no unscored third party, network refusals) — lowering never widens that.
+ * Exempt (own) hosts and quotes without a score count as passing, as in applyProbeFilter.
+ */
+export function adjustThreshold<Q extends { pubkey: string; catalog?: { host: string } | null }>(
+  quotes: Q[], lookups: Map<string, ProbeLookup>, requested: number, minCandidates = 2, floor = 85, exemptHosts: string[] = [],
+): ThresholdAdjust {
+  const lo = Math.min(floor, requested);
+  const scoreOf = (q: Q): number | null => {
+    const h = q.catalog?.host?.toLowerCase();
+    if (h && exemptHosts.includes(h)) return null;
+    const l = lookups.get(q.pubkey);
+    return l?.status === "scored" ? l.score : null;
+  };
+  const passing = (t: number) => quotes.filter((q) => { const s = scoreOf(q); return s === null || s >= t; }).length;
+  const base = { requested, min_candidates: minCandidates, floor: lo, passing_at_requested: passing(requested) };
+  if (base.passing_at_requested >= minCandidates) return { ...base, effective: requested, reason: "none", passing_at_effective: base.passing_at_requested };
+  const steps = [...new Set(quotes.map(scoreOf).filter((s): s is number => s !== null && s < requested && s >= lo))].sort((a, b) => b - a);
+  const hit = steps.find((t) => passing(t) >= minCandidates);
+  if (hit !== undefined) return { ...base, effective: hit, reason: "lowered", passing_at_effective: passing(hit) };
+  return { ...base, effective: lo, reason: "floor_reached", passing_at_effective: passing(lo) };
+}
